@@ -387,15 +387,16 @@ func (s *server) dispatch(typ uint8, r *rbuf, fids map[uint32]*fid, msize *uint3
 			return Rerror, nil, errPerm
 		}
 		if fd.n.dir {
-			data := fd.n.dirData()
-			if off >= uint64(len(data)) {
-				w := &wbuf{}
-				w.u32(0)
-				return Rread, w.b, nil
-			}
-			data = data[off:]
-			if uint64(cnt) < uint64(len(data)) {
-				data = data[:cnt]
+			data := fd.n.dirSlice(off, cnt)
+			w := &wbuf{}
+			w.u32(uint32(len(data)))
+			w.b = append(w.b, data...)
+			return Rread, w.b, nil
+		}
+		if fd.n.reader != nil {
+			data, err := fd.n.reader(off, cnt)
+			if err != nil {
+				return Rerror, nil, err
 			}
 			w := &wbuf{}
 			w.u32(uint32(len(data)))

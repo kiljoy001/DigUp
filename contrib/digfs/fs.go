@@ -24,6 +24,8 @@ type fsNode struct {
 	mtime   uint32
 	parent  *fsNode
 	content func() []byte
+	size    func() uint64
+	reader  func(off uint64, count uint32) ([]byte, error)
 	list    func() []*fsNode
 	onLine  func(string) error
 }
@@ -49,20 +51,38 @@ func (n *fsNode) walk(name string) (*fsNode, error) {
 	return nil, errNotExist
 }
 
-func (n *fsNode) dirData() []byte {
+// dirSlice returns whole directory entries starting at byte offset off,
+// never splitting one across reads.  A server that slices at an arbitrary
+// byte makes the client fail with "malformed directory contents".
+func (n *fsNode) dirSlice(off uint64, count uint32) []byte {
 	kids := n.list()
 	sort.Slice(kids, func(i, j int) bool { return kids[i].name < kids[j].name })
 	var out []byte
+	var pos uint64
 	for _, c := range kids {
-		out = append(out, encodeStat(c)...)
+		e := encodeStat(c)
+		if pos+uint64(len(e)) <= off {
+			pos += uint64(len(e))
+			continue
+		}
+		if len(out)+len(e) > int(count) {
+			break
+		}
+		out = append(out, e...)
+		pos += uint64(len(e))
 	}
 	return out
 }
 
 func (n *fsNode) stat() (name string, mode uint32, length uint64, mtime uint32) {
 	length = 0
-	if !n.dir && n.content != nil {
-		length = uint64(len(n.content()))
+	if !n.dir {
+		switch {
+		case n.size != nil:
+			length = n.size()
+		case n.content != nil:
+			length = uint64(len(n.content()))
+		}
 	}
 	return n.name, n.mode, length, n.mtime
 }
@@ -99,6 +119,12 @@ type tree struct {
 	newest  *fsNode
 	started time.Time
 	maxQ    int
+
+	shares   map[string]*share
+	remote   map[string]*fsNode
+	remoteMu sync.Mutex
+	cacheDir string
+	maxFetch int64
 }
 
 type queryRec struct {
@@ -130,6 +156,10 @@ type hit struct {
 	modified time.Time
 	excerpt  string
 	text     string
+
+	shareName  string // set when the file came through a mount
+	remotePath string
+	cachePath  string
 }
 
 func (t *tree) newID() uint64 { return atomic.AddUint64(&t.nextID, 1) }
@@ -155,6 +185,19 @@ func (t *tree) build() *fsNode {
 	stats := t.file(t.root, "stats", 0444, func() []byte { return []byte(t.statsText()) })
 	help := t.file(t.root, "help", 0444, func() []byte { return []byte(helpText) })
 	roots := t.file(t.root, "roots", 0444, func() []byte { return []byte(t.rootsText()) })
+	shares := t.file(t.root, "shares", 0444, func() []byte { return []byte(t.sharesText()) })
+
+	// mnt is the live view of every mounted server: a remote tree walked
+	// through this namespace, not a copy.
+	mnt := t.dirNode(t.root, "mnt", func() []*fsNode {
+		t.mu.Lock()
+		defer t.mu.Unlock()
+		out := make([]*fsNode, 0, len(t.shares))
+		for _, sh := range t.shares {
+			out = append(out, t.remoteNode(sh, nil, sh.rootinfo))
+		}
+		return out
+	})
 
 	// q/newest always names the last query, without the numbering.
 	t.newest = t.dirNode(nil, "newest", func() []*fsNode {
@@ -178,7 +221,7 @@ func (t *tree) build() *fsNode {
 	})
 	t.newest.parent = t.qdir
 
-	t.root.list = func() []*fsNode { return []*fsNode{ctl, stats, roots, t.qdir, help} }
+	t.root.list = func() []*fsNode { return []*fsNode{ctl, stats, roots, shares, t.qdir, mnt, help} }
 	return t.root
 }
 
@@ -205,6 +248,12 @@ ctl commands:
 	code <words>                   the same, shorter
 	reload                         after an index run changed the index
 
+	mount <name> <net!host!port> [path]
+	                               mount a 9P server; it appears at /mnt/<name>
+	umount <name>
+	refresh <name> [path]          mirror remote files into the cache
+	index <name> [path]            run the indexer over the mirror
+
 q/ holds one directory per query, numbered in order; q/newest is the last one.
 Each query directory has:
 
@@ -215,6 +264,15 @@ Each query directory has:
 
 The index and the model belong to digup; digfs only asks it questions. If a
 file is not under an indexed folder, it will not appear here.
+
+A mounted share is both things at once: /mnt/<name>/ is the live remote
+tree, and refresh copies it into the cache so the indexer can read it. A
+result from there names the file where it lives (share:/path) and says
+where the copy it read is.
+
+	share: papers
+	path: papers:/2026/foo.pdf
+	cache: /home/me/.cache/digfs/papers/2026/foo.pdf
 `
 
 func (t *tree) statsText() string {
@@ -234,8 +292,9 @@ pending: %d
 unfinished: %d
 code vectors: %d
 queries: %d
+shares: %d
 `, st.Index, st.Encoder, st.Vectors, st.Files, st.Searchable, st.Pending,
-		st.Unfinished, st.CodeVectors, nq)
+		st.Unfinished, st.CodeVectors, nq, len(t.shares))
 }
 
 func (t *tree) rootsText() string {
@@ -289,6 +348,50 @@ func (t *tree) control(line string) error {
 			return fmt.Errorf("usage: search <words> [limit N] [kind a,b] [code]")
 		}
 		return t.runQuery(strings.Join(q, " "), code, limit, kinds)
+	case "mount":
+		if len(f) < 3 {
+			return fmt.Errorf("usage: mount <name> <net!host!port> [path]")
+		}
+		aname := ""
+		if len(f) > 3 {
+			aname = strings.Join(f[3:], " ")
+		}
+		_, err := t.mount(f[1], f[2], aname)
+		return err
+	case "umount":
+		if len(f) != 2 {
+			return fmt.Errorf("usage: umount <name>")
+		}
+		return t.umount(f[1])
+	case "refresh":
+		if len(f) < 2 {
+			return fmt.Errorf("usage: refresh <name> [path]")
+		}
+		sub := ""
+		if len(f) > 2 {
+			sub = strings.Join(f[2:], " ")
+		}
+		t.mu.Lock()
+		sh, ok := t.shares[f[1]]
+		t.mu.Unlock()
+		if !ok {
+			return fmt.Errorf("%s is not mounted", f[1])
+		}
+		go func() {
+			if _, _, err := sh.refresh(sub, t.maxFetch, skipDirs); err != nil {
+				logf("refresh %s: %v", sh.name, err)
+			}
+		}()
+		return nil
+	case "index":
+		if len(f) < 2 {
+			return fmt.Errorf("usage: index <name> [path]")
+		}
+		sub := ""
+		if len(f) > 2 {
+			sub = strings.Join(f[2:], " ")
+		}
+		return t.indexShare(f[1], sub)
 	case "reload":
 		return t.eng.Reload()
 	case "quit":
@@ -325,6 +428,11 @@ func (t *tree) runQuery(text string, code bool, limit int, kinds string) error {
 			}
 			if hi.text == "" {
 				hi.text = hi.excerpt
+			}
+			if name, remote, cache, ok := t.locate(h.Path); ok {
+				hi.shareName = name
+				hi.remotePath = remote
+				hi.cachePath = cache
 			}
 			r.hits = append(r.hits, hi)
 		}
@@ -396,7 +504,7 @@ func (r *queryRec) hitByName(name string) *hit {
 func (r *queryRec) pathsText() string {
 	var b strings.Builder
 	for _, h := range r.hits {
-		fmt.Fprintf(&b, "%s\n", h.path)
+		fmt.Fprintf(&b, "%s\n", h.displayPath())
 	}
 	return b.String()
 }
@@ -418,9 +526,20 @@ func (h *hit) fileName() string {
 	return fmt.Sprintf("%02d-%s", h.idx, base)
 }
 
+func (h *hit) displayPath() string {
+	if h.shareName != "" {
+		return h.shareName + ":" + h.remotePath
+	}
+	return h.path
+}
+
 func (h *hit) content() []byte {
 	var b strings.Builder
-	fmt.Fprintf(&b, "path: %s\n", h.path)
+	fmt.Fprintf(&b, "path: %s\n", h.displayPath())
+	if h.shareName != "" {
+		fmt.Fprintf(&b, "share: %s\n", h.shareName)
+		fmt.Fprintf(&b, "cache: %s\n", h.cachePath)
+	}
 	fmt.Fprintf(&b, "kind: %s\n", h.kind)
 	fmt.Fprintf(&b, "unit: %s %s (segment %d)\n", h.segment, formatLoc(h.loc), h.segID)
 	fmt.Fprintf(&b, "score: %.4f (cosine %.4f, z %.4f, keyword %d)\n", h.score, h.cosine, h.z, h.kword)

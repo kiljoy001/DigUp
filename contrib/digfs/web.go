@@ -141,7 +141,7 @@ func (w *web) query(rw http.ResponseWriter, r *http.Request) {
 			q.n, name, html.EscapeString(filepath.Base(h.path)), html.EscapeString(h.kind),
 			html.EscapeString(formatLoc(h.loc)), h.score, h.cosine)
 		fmt.Fprintf(&b, `<span class="meta">%s · <a href="/raw/%d/%s">open the file</a></span><pre>%s</pre></div>`,
-			html.EscapeString(h.path), q.n, name, html.EscapeString(truncate(h.excerpt, 600)))
+			html.EscapeString(h.displayPath()), q.n, name, html.EscapeString(truncate(h.excerpt, 600)))
 	}
 	fmt.Fprint(rw, w.html(q.text, b.String()))
 }
@@ -167,7 +167,7 @@ func (w *web) hitPage(rw http.ResponseWriter, r *http.Request) {
 	var b strings.Builder
 	fmt.Fprintf(&b, `<h1>%s</h1><p class="meta">%s · unit %s %s · score %.3f (cosine %.3f)<br>%s · <a href="/raw/%d/%s">open the file</a> · <a href="/q/%d/">back</a></p>`,
 		html.EscapeString(filepath.Base(h.path)), html.EscapeString(h.kind), html.EscapeString(h.segment),
-		html.EscapeString(formatLoc(h.loc)), h.score, h.cosine, html.EscapeString(h.path), q.n, name, q.n)
+		html.EscapeString(formatLoc(h.loc)), h.score, h.cosine, html.EscapeString(h.displayPath()), q.n, name, q.n)
 	fmt.Fprintf(&b, `<pre>%s</pre>`, html.EscapeString(h.text))
 	fmt.Fprint(rw, w.html(filepath.Base(h.path), b.String()))
 }

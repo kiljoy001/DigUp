@@ -26,6 +26,13 @@ func (r *rootsFlag) Set(v string) error {
 
 var verbose bool
 
+func defaultCache() string {
+	if d, err := os.UserCacheDir(); err == nil {
+		return d + "/digfs/fs"
+	}
+	return "/tmp/digfs-cache"
+}
+
 func logf(format string, a ...any) {
 	fmt.Fprintf(os.Stderr, "digfs %s ", time.Now().Format("15:04:05"))
 	fmt.Fprintf(os.Stderr, format, a...)
@@ -34,13 +41,15 @@ func logf(format string, a ...any) {
 
 func main() {
 	var (
-		addr    = flag.String("a", "tcp!127.0.0.1!5640", "9P address, net!host!port (host * for every interface)")
-		webAddr = flag.String("w", "", "HTML address, net!host!port; empty disables it")
-		digup   = flag.String("digup", "digup", "the digup binary")
-		index   = flag.String("index", "", "index folder (digup's default when empty)")
-		models  = flag.String("models", "", "DIGUP_MODELS for the engine")
-		clean   = flag.Bool("cleanenv", false, "run digup without LD_LIBRARY_PATH (when another llama.cpp shadows its own)")
-		maxq    = flag.Int("maxq", 100, "most hits a single query may ask for")
+		addr     = flag.String("a", "tcp!127.0.0.1!5640", "9P address, net!host!port (host * for every interface)")
+		webAddr  = flag.String("w", "", "HTML address, net!host!port; empty disables it")
+		digup    = flag.String("digup", "digup", "the digup binary")
+		index    = flag.String("index", "", "index folder (digup's default when empty)")
+		models   = flag.String("models", "", "DIGUP_MODELS for the engine")
+		clean    = flag.Bool("cleanenv", false, "run digup without LD_LIBRARY_PATH (when another llama.cpp shadows its own)")
+		maxq     = flag.Int("maxq", 100, "most hits a single query may ask for")
+		cache    = flag.String("cache", defaultCache(), "where mounted shares are mirrored")
+		maxFetch = flag.Int64("maxfetch", 256<<20, "largest file a refresh will copy, in bytes")
 	)
 	var roots rootsFlag
 	flag.Var(&roots, "root", "an indexed folder (repeatable; for the HTML view's file links)")
@@ -53,11 +62,18 @@ func main() {
 		}
 	}
 
+	// The engine answers only for the folders it was started with, so the
+	// mirror has to be one of them: a mounted share is searchable from the
+	// moment it is refreshed.
+	roots = append(roots, *cache)
+
 	eng := &engine{
 		digup: *digup, index: *index, roots: roots, models: *models,
 		cleanEnv: *clean, verbose: verbose,
 	}
-	t := &tree{eng: eng, roots: roots, maxQ: *maxq, started: time.Now()}
+	t := &tree{eng: eng, roots: roots, maxQ: *maxq, started: time.Now(),
+		shares: map[string]*share{}, remote: map[string]*fsNode{},
+		cacheDir: *cache, maxFetch: *maxFetch}
 	t.build()
 
 	// The HTML view only serves files it can prove are indexed. Ask the engine

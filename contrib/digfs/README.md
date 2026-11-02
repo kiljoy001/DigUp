@@ -81,9 +81,61 @@ If `LD_LIBRARY_PATH` names another llama.cpp build, the dynamic linker picks
 that one first and the model fails with `unknown model architecture:
 'gemma-embedding2'`. Pass `-cleanenv` to run the engine without that variable.
 
+## Mounting other filesystems
+
+The index should not care whether a file is on this disk. digfs speaks 9P as
+a client as well as a server, so any 9P tree — another digfs, a 9front
+export, a Harvey `/srv` service — can be mounted, browsed and indexed:
+
+```
+echo 'mount papers tcp!192.168.2.9!5640 /home/me/papers' >> ctl
+ls /mnt/papers                       # live: nothing is copied
+echo 'refresh papers' >> ctl         # mirror it into the cache
+echo 'index papers' >> ctl           # run the indexer over the mirror
+```
+
+`/mnt/<name>/` is the remote tree itself, walked through digfs. `refresh`
+copies files whose size or modification time changed into
+`~/.cache/digfs/fs/<name>/` — the indexer reads local paths, so the mirror is
+what makes a remote tree indexable. `.git`, `.hg`, `.svn` and `node_modules`
+are skipped, and files over `-maxfetch` (256 MB) are left alone.
+
+A hit from a share says where the file actually lives:
+
+```
+path: papers:/2026/foo.pdf
+share: papers
+cache: /home/me/.cache/digfs/papers/2026/foo.pdf
+```
+
+The text of every unit is already in the index, so deleting the cache does
+not break search or `text`; only `raw` and "open the file" need the copy.
+`refresh <name> [path]` and `index <name> [path]` take a subdirectory, which
+is how you index one folder of a large export.
+
+The engine is started with the cache directory as one of its roots, so
+anything refreshed is searchable without restarting.
+
+## Presenting it: webbox
+
+[sirjofri's webbox](https://shithub.us/sirjofri/webbox) is a 9front rc
+script: give it a port and a folder, and it serves that folder as HTML over
+tcp80 CGI, with a raw link for every file and snarf/plumb for the text. The
+query directories are ordinary directories, so the presentation is a mount
+and a command:
+
+```
+9fs tcp!indexhost!5650              # or: mount -a tcp!indexhost!5650 /n/dig
+webbox 8080 /n/dig/q/newest         # needs urldecode(1) and tcp80
+```
+
+`/f/q/newest/00-foo.md` shows the passage, `/files/...` the raw file. The
+built-in `-w` view remains the zero-dependency fallback.
+
 ## What it is not
 
-- **Not an indexer.** `digup index` still builds the index; digfs only asks.
+- **Not an indexer.** `digup index` still builds the index; digfs runs it and
+  asks the search service questions.
 - **Not a model host.** No embeddings, no llama.cpp, no Python: one Go binary
   that speaks JSON to the engine and 9P to clients.
 - **No `similar <segment>` yet.** The engine exposes `text` and `search`, not

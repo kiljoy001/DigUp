@@ -79,15 +79,9 @@ type summariesReply struct {
 	} `json:"roots"`
 }
 
-func (e *engine) start() error {
-	if e.cmd != nil {
-		return nil
-	}
-	args := []string{"search-service"}
-	args = append(args, e.roots...)
-	if e.index != "" {
-		args = append(args, "--index", e.index)
-	}
+// command builds a digup invocation with the same environment the engine
+// gets, so indexing sees the model folder and the same library path.
+func (e *engine) command(args ...string) *exec.Cmd {
 	cmd := exec.Command(e.digup, args...)
 	cmd.Stderr = os.Stderr
 	if e.cleanEnv || e.models != "" {
@@ -103,6 +97,19 @@ func (e *engine) start() error {
 		}
 		cmd.Env = env
 	}
+	return cmd
+}
+
+func (e *engine) start() error {
+	if e.cmd != nil {
+		return nil
+	}
+	args := []string{"search-service"}
+	args = append(args, e.roots...)
+	if e.index != "" {
+		args = append(args, "--index", e.index)
+	}
+	cmd := e.command(args...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return err
