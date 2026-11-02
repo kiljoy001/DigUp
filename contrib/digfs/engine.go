@@ -280,6 +280,13 @@ func (e *engine) Reload() error {
 	return e.call(map[string]any{"op": "reload"}, 5*time.Minute, nil)
 }
 
+// SetFolders tells the running service which folders may answer.  The
+// service filters every hit to the folders it was started with, so an
+// index built elsewhere is invisible until this is sent.
+func (e *engine) SetFolders(roots []string) error {
+	return e.call(map[string]any{"op": "folders", "roots": roots}, 60*time.Second, nil)
+}
+
 func (e *engine) Summaries() (*summariesReply, error) {
 	var r summariesReply
 	err := e.call(map[string]any{"op": "summaries", "code": false}, 60*time.Second, &r)

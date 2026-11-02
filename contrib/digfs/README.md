@@ -43,12 +43,22 @@ for (p in `{cat /n/dig/q/newest/paths}) echo $p
 gives the source files to open in place. `q/newest` is not a symlink (9P has
 none): it is a directory that always lists the last query's children.
 
-## Running it
+## A first run
 
 ```sh
-cd contrib/digfs
-go build
+digup download-model                  # once: about 865 MB
+digup index ~/notes                   # once: build the index
 
+cd contrib/digfs && go build
+./digfs -w 'tcp!*!8080' -root ~/notes
+```
+
+Then open `http://localhost:8080/`.  Put `digup` on `PATH`, or name it with
+`-digup`.  If your model is somewhere else, pass `-models ~/DigUp/Models`.
+
+The full form:
+
+```sh
 ./digfs \
   -a 'tcp!*!5650' -w 'tcp!*!8080' \
   -digup /usr/lib/DigUp/helper/digup \
@@ -58,8 +68,10 @@ go build
 ```
 
 `-a` and `-w` take Plan 9 addresses (`net!host!port`, `*` for every
-interface). `-root` is repeatable and only guards the HTML view's file links:
-9P clients resolve `path:` themselves.
+interface).  `-root` is repeatable: it names the folders the engine may
+answer for, and the only files the HTML view will serve raw.  **With no
+`-root`, every folder in the index answers** and raw links are limited to
+mirrored shares.
 
 From Plan 9 or 9front:
 

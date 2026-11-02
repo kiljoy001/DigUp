@@ -92,10 +92,19 @@ func main() {
 	// The engine answers only for the folders it was started with, so the
 	// mirror has to be one of them: a mounted share is searchable from the
 	// moment it is refreshed.
+	given := len(roots)
 	roots = append(roots, *cache)
 
+	// With no -root, let the service answer for the whole index.  "/" is only
+	// a prefix for its database query, not a walk; the web view keeps the
+	// narrower list below, so raw bytes are still limited to what was named.
+	engRoots := roots
+	if given == 0 {
+		engRoots = []string{"/", *cache}
+	}
+
 	eng := &engine{
-		digup: *digup, index: *index, roots: roots, models: *models,
+		digup: *digup, index: *index, roots: engRoots, models: *models,
 		cleanEnv: *clean, verbose: verbose,
 	}
 	t := &tree{eng: eng, roots: roots, maxQ: *maxq, started: time.Now(),
@@ -104,16 +113,6 @@ func main() {
 	t.build()
 	// A restart keeps the same namespace: re-dial every share we had.
 	t.restoreShares()
-
-	// The HTML view only serves files it can prove are indexed. Ask the engine
-	// for the folders when none were named.
-	if len(t.roots) == 0 {
-		if s, err := eng.Summaries(); err == nil {
-			for _, r := range s.Roots {
-				t.roots = append(t.roots, r.Path)
-			}
-		}
-	}
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
@@ -138,7 +137,10 @@ func main() {
 		go t.syncLoop(*syncEvery)
 	}
 
-	logf("index %s, %d roots", *index, len(t.roots))
+	if given == 0 {
+		logf("no -root: every indexed folder answers; pass -root to scope it and to allow raw downloads")
+	}
+	logf("index %s, %d web roots", *index, len(t.roots))
 	<-sig
 	eng.stop()
 }
