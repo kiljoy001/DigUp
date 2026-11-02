@@ -194,6 +194,22 @@ name: 9P2000 leaves `aname` to the server, and a server that ignores it
 would look like success while exposing its whole export (this cost a 2.2 GB
 mirror of the wrong tree before it was fixed).
 
+### SMB shares
+
+Office data is usually on SMB, not 9P.  [`../smb9p/`](../smb9p/) is the
+adapter: one process holds a service account, serves one share read-only
+over 9P, and needs no kernel mount or root.
+
+```
+smb9p -server files:445 -share documents -user 'DOMAIN\svc-index' -pass-env SMBSECRET
+mount office tcp!smbhost!5640 /documents
+sync office
+```
+
+Hits then read `office:/lease.md`.  Run one bridge per share and per access
+boundary: it carries one account's rights, and the 9P side has no
+authentication of its own.
+
 ### webbox, if you want a Plan 9 front end
 
 [sirjofri's webbox](https://shithub.us/sirjofri/webbox) is a 9front rc script
