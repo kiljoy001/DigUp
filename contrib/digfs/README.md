@@ -157,6 +157,29 @@ webbox 8080 /n/dig/q/newest         # needs urldecode(1) and tcp80
 `/f/q/newest/00-foo.md` shows the passage, `/files/...` the raw file. The
 built-in `-w` view remains the zero-dependency fallback.
 
+The source is at <https://shithub.us/sirjofri/webbox/HEAD/info.html> — note
+the `/HEAD/info.html`, the bare `/sirjofri` path is not served. It needs
+`urldecode(1)` and [tcp80](https://shithub.us/grobe0ba/tcp80/HEAD/info.html);
+both build with `mk install` on a 9front box.
+
+Verified end to end here: a 9front guest mounted this tree, ran webbox over
+`q/newest`, and the host fetched the rendered pages through a QEMU port
+forward.
+
+```
+# 9front
+9fs tcp!10.0.2.2!5650
+echo 'search search results as files over 9P' > '/n/10.0.2.2!5650/ctl'
+webbox 8080 '/n/10.0.2.2!5650/q/newest'
+
+# host (QEMU user networking; add the forward over QMP)
+curl -k https://127.0.0.1:18080/f/
+curl -k https://127.0.0.1:18080/files/00-DESIGN.md
+```
+
+The listing comes back as `00-DESIGN.md … 05-pmic-bringup.md` with `/f/` and
+`/files/` links, and the raw link starts with `path: repo:/sigil/docs/…`.
+
 ## What it is not
 
 - **Not an indexer.** `digup index` still builds the index; digfs runs it and
