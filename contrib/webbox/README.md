@@ -86,6 +86,9 @@ things that cost the most time:
 - `'search '^$list` prefixes *every* element of the list; `echo search $list`
   joins the elements with spaces, which is what a command line wants.
 - rc has `break` but no `continue`; filter the list before the loop.
+- `tr -d '\n'` on 9front deletes the characters `\` and `n`, not the
+  newline — every "n" in a title disappeared ("long press" became "log
+  press").  Use `awk 'BEGIN{ORS=""}{print; exit}'` to strip a newline.
 
 ## Licence
 

@@ -1,12 +1,18 @@
 #!/bin/rc
 
-# webbox - browse a directory as a web page.
+# webbox - browse or search a directory as a web page.
 #
-# Forked from sirjofri's webbox (https://shithub.us/sirjofri/webbox) and
-# restyled: a light/dark palette, a real file listing, and a metadata card
-# for digfs query results (a file that begins with "path:" and has a "---"
-# line).  Same URL surface: /, /f/..., /files/..., /snarf, /dosnarf.html,
-# /doplumb.html.
+# Forked from sirjofri's webbox (https://shithub.us/sirjofri/webbox).
+#
+# Two modes, chosen by what the folder is:
+#
+#   browser   a directory: breadcrumbs, a listing, a page per file.
+#   digfs     a digfs tree (it has ctl and q/): the home page is a search
+#             box, a query result is a page of cards, and a search writes
+#             to ctl and renders the answer.  /f/... still browses.
+#
+# Same URL surface as before: /, /f/..., /files/..., /snarf,
+# /dosnarf.html, /doplumb.html, plus /search?q=... in digfs mode.
 #
 #	webbox [port] [folder]
 
@@ -29,15 +35,17 @@ folder=/
 	test -d $2 && folder=$2
 }
 
+digfs=0
+test -f $folder/ctl && test -d $folder/q && digfs=1
+
 echo webbox configuration:
 echo - exposing folder: $folder
 echo - port: $port
+~ $digfs 1 && echo - digfs tree: search and result pages
 
 webbox=/n/webbox
 
 fn bootstrap {
-	# The stylesheet and the shell of every page.  The heredoc is
-	# unquoted so $sysname expands; keep "$" and backticks out of the CSS.
 	# The first byte must be the newline that ends tcp80's header block:
 	# a rule's CGI writes straight to the connection after headers().
 	cat <<EOF >$webbox/header.html
@@ -67,7 +75,6 @@ fn bootstrap {
 html{color-scheme:light dark;-webkit-text-size-adjust:100%}
 body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.65 var(--sans);
      min-height:100vh;display:flex;flex-direction:column}
-.wrap{flex:1}
 a{color:var(--accent)}
 .bar{position:sticky;top:0;z-index:5;display:flex;align-items:center;justify-content:space-between;
      padding:.65rem 1.25rem;background:var(--bg);border-bottom:1px solid var(--line)}
@@ -75,7 +82,7 @@ a{color:var(--accent)}
        color:var(--fg);text-decoration:none}
 .mark{width:.85rem;height:.85rem;border-radius:3px;background:var(--accent)}
 .host{font:12px/1 var(--mono);color:var(--muted)}
-.wrap{width:100%;max-width:56rem;margin:0 auto;padding:1.4rem 1.25rem 4rem}
+.wrap{width:100%;max-width:56rem;margin:0 auto;padding:1.4rem 1.25rem 4rem;flex:1}
 .crumbs{display:flex;flex-wrap:wrap;align-items:center;gap:.15rem;margin:.4rem 0 1rem;
         font:13px/1 var(--mono)}
 .crumbs a{color:var(--muted);text-decoration:none;padding:.3rem .4rem;border-radius:6px}
@@ -85,6 +92,12 @@ a{color:var(--accent)}
 .title{font:600 1.35rem/1.25 var(--mono);margin:0;letter-spacing:-.01em;overflow-wrap:anywhere}
 .count{font:11px/1 var(--mono);color:var(--muted);text-transform:uppercase;letter-spacing:.06em;
        border:1px solid var(--line);border-radius:999px;padding:.35rem .6rem;white-space:nowrap}
+.meta{color:var(--muted);font-size:.9rem}
+.search{display:flex;gap:.5rem;margin:1.2rem 0 1.8rem;max-width:44rem}
+.search input[type=search]{flex:1;padding:.7rem .9rem;border:1px solid var(--line);
+       border-radius:10px;background:var(--card);color:var(--fg);font:15px var(--sans)}
+.search input[type=search]:focus{outline:2px solid var(--accent);outline-offset:1px;
+       border-color:transparent}
 .files{list-style:none;margin:0;padding:0;background:var(--card);border:1px solid var(--line);
        border-radius:12px;overflow:hidden;box-shadow:var(--shadow)}
 .files .row{display:flex;align-items:center;gap:.8rem;padding:.7rem 1rem;
@@ -104,17 +117,32 @@ a{color:var(--accent)}
 .doc{margin:1rem 0 0;padding:1.1rem 1.25rem;background:var(--code);border:1px solid var(--line);
      border-radius:12px;font:13.5px/1.7 var(--mono);white-space:pre-wrap;
      overflow-wrap:anywhere;tab-size:4}
-.hit{margin:1rem 0 0;padding:1rem 1.1rem;background:var(--card);border:1px solid var(--line);
+.hits{display:grid;gap:1rem}
+.hit{margin:0;padding:1rem 1.1rem;background:var(--card);border:1px solid var(--line);
      border-radius:12px;box-shadow:var(--shadow)}
 .hit .where{font:600 14px/1.5 var(--mono);overflow-wrap:anywhere}
+.hit .where a{text-decoration:none}
 .hit .where .share{color:var(--accent)}
 .hit .where .path{color:var(--fg)}
-.hit .chips{display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.65rem}
+.hit .chips{display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.6rem}
 .chip{font:11px/1 var(--mono);color:var(--muted);border:1px solid var(--line);
       border-radius:999px;padding:.35rem .6rem;white-space:nowrap}
 .chip b{color:var(--fg);font-weight:600}
+.hit .snippet{margin:.75rem 0 .9rem;font-size:.95rem;line-height:1.6;color:var(--fg);
+             display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.hit .more a{font:600 .85rem/1 var(--sans)}
 .hit + .doc{margin-top:.7rem}
-.hero{padding:1.2rem 0 1.6rem}
+.recent{margin:2.5rem 0 0}
+.recent h2{font-size:.75rem;text-transform:uppercase;letter-spacing:.09em;color:var(--muted);
+           margin:0 0 .5rem;font-weight:600}
+.recent ul{list-style:none;padding:0;margin:0;border:1px solid var(--line);border-radius:12px;
+           background:var(--card);overflow:hidden}
+.recent li{border-top:1px solid var(--line)}
+.recent li:first-child{border-top:0}
+.recent a{display:block;padding:.6rem 1rem;text-decoration:none;color:var(--fg);
+          font:13px/1.4 var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.recent a:hover{background:var(--accent-2)}
+.hero{padding:1.2rem 0 1.2rem}
 .hero h1{font-size:1.7rem;line-height:1.2;margin:0 0 .4rem;letter-spacing:-.02em}
 .hero p{margin:0;color:var(--muted)}
 .grid{display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(16rem,1fr))}
@@ -137,6 +165,7 @@ textarea{width:100%;min-height:7.5rem;padding:.7rem;border:1px solid var(--line)
   .bar{padding:.55rem .8rem}
   .title{font-size:1.15rem}
   .files .row{padding:.65rem .8rem}
+  .search{flex-direction:column}
 }
 </style>
 </head>
@@ -148,7 +177,12 @@ textarea{width:100%;min-height:7.5rem;padding:.7rem;border:1px solid var(--line)
 <main class="wrap">
 EOF
 
-	echo `{basename $folder} >$webbox/folder.name
+	if(~ $digfs 1){
+		echo index >$webbox/folder.name
+	}
+	if(~ $digfs 0){
+		echo `{basename $folder} >$webbox/folder.name
+	}
 
 	cat <<'EOF' >$webbox/footer.html
 </main>
@@ -157,6 +191,12 @@ EOF
 </footer>
 </body>
 </html>
+EOF
+
+	# Escape one line for HTML text and attributes.
+	cat <<'EOF' >$webbox/bin/esc1
+#!/bin/rc
+sed -n 1p | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g' | awk 'BEGIN{ORS=""}{print; exit}'
 EOF
 
 	cat <<'EOF' >$webbox/bin/crumbs.awk
@@ -174,7 +214,7 @@ EOF
 }
 EOF
 
-	# The metadata card for a digfs result: path, share, unit, score.
+	# The metadata card for a digfs result: share, path, unit, score.
 	cat <<'EOF' >$webbox/bin/hitmeta.awk
 function esc(s){
 	gsub(/&/, "\\&amp;", s)
@@ -206,6 +246,147 @@ END{
 }
 EOF
 
+	# One result in a list: where it came from, the numbers, a preview,
+	# and the link to the passage.
+	cat <<'EOF' >$webbox/bin/hitcard.awk
+function esc(s){
+	gsub(/&/, "\\&amp;", s)
+	gsub(/</, "\\&lt;", s)
+	gsub(/>/, "\\&gt;", s)
+	return s
+}
+BEGIN{body = 0; n = 0}
+body == 0 {
+	if($0 == "---"){ body = 1; next }
+	if(substr($0, 1, 6) == "path: ") path = substr($0, 7)
+	if(substr($0, 1, 7) == "share: ") share = substr($0, 8)
+	if(substr($0, 1, 6) == "kind: ") kind = substr($0, 7)
+	if(substr($0, 1, 6) == "unit: ") unit = substr($0, 7)
+	if(substr($0, 1, 7) == "score: "){ split(substr($0, 8), s, " "); score = s[1] }
+	next
+}
+body == 1 {
+	gsub(/^[ \t]+/, "")
+	if($0 == "") next
+	snippet = snippet (n++ ? " " : "") $0
+	if(length(snippet) > 320) exit
+}
+END{
+	printf "<article class=\"hit\"><div class=\"where\"><a href=\"/f%s/%s\">", q, f
+	if(share != "")
+		printf "<span class=\"share\">%s</span><span class=\"path\">%s</span>", esc(share), esc(substr(path, length(share) + 1))
+	else
+		printf "<span class=\"path\">%s</span>", esc(path)
+	print "</a></div><div class=\"chips\">"
+	if(unit != "") printf "<span class=\"chip\"><b>unit</b> %s</span>", esc(unit)
+	if(score != "") printf "<span class=\"chip\"><b>score</b> %s</span>", esc(score)
+	if(kind != "") printf "<span class=\"chip\">%s</span>", esc(kind)
+	print "</div>"
+	if(snippet != "") printf "<p class=\"snippet\">%s…</p>", esc(snippet)
+	printf "<p class=\"more\"><a href=\"/f%s/%s\">Read the passage</a></p></article>\n", q, f
+}
+EOF
+
+	cat <<'EOF' >$webbox/bin/recent
+#!/bin/rc
+qd=/usr/web/files/q
+test -d $qd || exit
+list=`{ls $qd | sed 's|.*/||' | grep '^[0-9][0-9]*$' | sort -rn | sed -n '1,8p'}
+~ $#list 0 && exit
+echo '<section class="recent"><h2>Recent searches</h2><ul>'
+{
+	for(n in $list){
+		echo -n $n^' '
+		cat $qd/$n/query | /n/webbox/bin/esc1
+		echo ''
+	}
+} | awk '{ n = $1; sub(/^[^ ]* /, ""); if(!seen[$0]++) printf "<li><a href=\"/f/q/%s/\">%s</a></li>\n", n, $0 }'
+echo '</ul></section>'
+EOF
+
+	cat <<'EOF' >$webbox/bin/qpage
+#!/bin/rc
+# qpage <web path of a query directory>
+pat=$1
+root=/usr/web/files
+base=$pat
+~ $pat '/' && base=''
+d=$root^$base
+esc=/n/webbox/bin/esc1
+
+cat /n/webbox/header.html
+echo $pat | awk -f /n/webbox/bin/crumbs.awk
+
+hits=0
+strong=0
+timing=()
+if(test -f $d/summary){
+	hits=`{awk '/^hits:/{print $2}' $d/summary}
+	strong=`{awk '/^hits:/{n=$4; gsub(/[^0-9]/, "", n); print n}' $d/summary}
+	timing=`{awk '/^embed:/{sub(/^embed: /, ""); print}' $d/summary}
+}
+
+echo '<div class="head"><h1 class="title">'
+cat $d/query | $esc
+echo '</h1><span class="count">'^$hits^' hits</span></div>'
+
+echo '<form class="search" action="/search" method="get">'
+echo -n '<input type="search" name="q" value="'
+cat $d/query | $esc
+echo '" placeholder="search">'
+echo '<button class="button" type="submit">search</button></form>'
+
+if(test -f $d/summary)
+	echo '<p class="meta">strong' $strong '·' $timing '</p>'
+
+echo '<div class="hits">'
+for(f in `{ls $d | sed 's|.*/||' | grep '^[0-9][0-9]-'})
+	awk -v 'q='$pat -v 'f='$f -f /n/webbox/bin/hitcard.awk $d^'/'^$f
+echo '</div>'
+
+if(~ $hits 0)
+	echo '<p class="empty">Nothing matched. Try fewer words, or a broader phrase.</p>'
+
+/n/webbox/bin/recent
+cat /n/webbox/footer.html
+EOF
+
+	cat <<'EOF' >$webbox/bin/search
+#!/bin/rc
+raw=$1
+code=0
+~ $raw *'&code=1' && {
+	raw=`{echo $raw | sed 's/&code=1$//'}
+	code=1
+}
+q=`{echo $raw | urldecode}
+if(~ $q '')
+	exec /n/webbox/bin/home
+if(~ $code 1)
+	echo code $q >/usr/web/files/ctl
+if not
+	echo search $q >/usr/web/files/ctl
+# Resolve the alias once: links from this page must keep pointing at this
+# query when another search moves q/newest.
+n=`{ls /usr/web/files/q | sed 's|.*/||' | grep '^[0-9][0-9]*$' | sort -rn | sed -n 1p}
+if(~ $n '')
+	exec /n/webbox/bin/qpage /q/newest
+exec /n/webbox/bin/qpage /q/$n
+EOF
+
+	cat <<'EOF' >$webbox/bin/home
+#!/bin/rc
+cat /n/webbox/header.html
+echo '<section class="hero"><h1>Search by meaning.</h1>'
+echo '<p>Everything indexed on this machine, from every tree it has mounted. Each hit opens the passage it came from.</p></section>'
+echo '<form class="search" action="/search" method="get">'
+echo '<input type="search" name="q" placeholder="what are you looking for?" autofocus>'
+echo '<button class="button" type="submit">search</button></form>'
+/n/webbox/bin/recent
+echo '<p class="meta" style="margin-top:2rem"><a href="/f/">Browse the index</a> · mount a share at <code>/mnt</code> and it shows up here too.</p>'
+cat /n/webbox/footer.html
+EOF
+
 	cat <<'EOF' >$webbox/bin/list
 #!/bin/rc
 pat='/'^$1
@@ -217,6 +398,11 @@ base=$pat
 d=$root^$base
 f=$d
 
+# A digfs query directory is a page of cards, not a listing.
+if(test -d $d)
+	if(test -f $root/ctl && test -d $root/q)
+		~ $pat /q/* && exec /n/webbox/bin/qpage $pat
+
 cat /n/webbox/header.html
 
 echo $pat | awk -f /n/webbox/bin/crumbs.awk
@@ -224,8 +410,10 @@ echo $pat | awk -f /n/webbox/bin/crumbs.awk
 if(test -f $f){
 	name=`{basename $f}
 	ename=`{echo $name | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g'}
-	echo '<div class="head"><h1 class="title">'^$ename^'</h1>'
-	echo '<a class="button ghost" href="/files'^$base^'">download</a></div>'
+	echo '<div class="head"><h1 class="title">'^$ename^'</h1><span>'
+	parent=`{basename -d $pat}
+	~ $parent /q/* && echo '<a class="button ghost" href="/f'^$parent^'/">back to results</a> '
+	echo '<a class="button ghost" href="/files'^$base^'">download</a></span></div>'
 	if(grep '^path: ' $f >/dev/null && grep '^---$' $f >/dev/null){
 		awk -f /n/webbox/bin/hitmeta.awk $f
 		echo '<pre class="doc">'
@@ -239,7 +427,7 @@ if(test -f $f){
 	}
 }
 if not {
-	kids=`{ls $d}
+	kids=`{ls $d | grep -v -e '^ctl$' -e '^log$'}
 	title=$pat
 	~ $pat '/' && title=`{cat /n/webbox/folder.name}
 	echo '<div class="head"><h1 class="title">'^$title^'</h1><span class="count">'^$#kids^' items</span></div>'
@@ -289,9 +477,35 @@ HTML
 cat /n/webbox/footer.html
 EOF
 
-	cat $webbox/header.html >$webbox/web/index.html
-	echo '<section class="hero"><h1>Files, as a web page.</h1><p>'^$folder^' on '^$sysname^', over tcp80 and tlssrv.</p></section>' >>$webbox/web/index.html
-	cat <<'HTML' >>$webbox/web/index.html
+	if(~ $digfs 1){
+		cat <<'EOF' >$webbox/rules
+^/index\.html$	/n/webbox/bin/home
+^/search\?q=(.*)	/n/webbox/bin/search '\1'
+/dosnarf.html\?d=(.*)	/n/webbox/bin/snarf '\1'
+/doplumb.html\?d=(.*)	/n/webbox/bin/plumb '\1'
+/f/(.*)	/n/webbox/bin/list '\1'
+EOF
+	}
+	if(~ $digfs 0){
+		cat <<'EOF' >$webbox/rules
+/dosnarf.html\?d=(.*)	/n/webbox/bin/snarf '\1'
+/doplumb.html\?d=(.*)	/n/webbox/bin/plumb '\1'
+/f/(.*)	/n/webbox/bin/list '\1'
+EOF
+	}
+
+	cat <<'EOF' >$webbox/namespace.httpd
+# empty
+EOF
+
+	bind $webbox/namespace.httpd /lib/namespace.httpd
+	chmod +x $webbox/bin/*
+
+	# The browser mode's static home, when this is not a digfs tree.
+	if(~ $digfs 0){
+		cat $webbox/header.html >$webbox/web/index.html
+		echo '<section class="hero"><h1>Files, as a web page.</h1><p>'^$folder^' on '^$sysname^', over tcp80 and tlssrv.</p></section>' >>$webbox/web/index.html
+		cat <<'HTML' >>$webbox/web/index.html
 <div class="grid">
   <section class="card">
     <h2>Browse</h2>
@@ -342,21 +556,8 @@ EOF
   </section>
 </div>
 HTML
-	cat $webbox/footer.html >>$webbox/web/index.html
-
-	cat <<'EOF' >$webbox/rules
-/dosnarf.html\?d=(.*)	$webbox/bin/snarf	'\1'
-/doplumb.html\?d=(.*)	$webbox/bin/plumb	'\1'
-/f/(.*)	$webbox/bin/list '\1'
-EOF
-
-	cat <<'EOF' >$webbox/namespace.httpd
-# empty
-EOF
-
-	bind $webbox/namespace.httpd /lib/namespace.httpd
-	chmod +x $webbox/bin/*
-
+		cat $webbox/footer.html >>$webbox/web/index.html
+	}
 }
 
 fn prephttps {
