@@ -117,14 +117,15 @@ func (e *engine) start() error {
 	e.cmd = cmd
 	e.in = bufio.NewWriter(stdin)
 	e.out = make(chan []byte, 8)
-	go func(ch chan<- []byte, r *bufio.Scanner) {
+	go func(ch chan<- []byte, r *bufio.Scanner, c *exec.Cmd) {
 		r.Buffer(make([]byte, 0, 1<<20), 64<<20)
 		for r.Scan() {
 			line := append([]byte(nil), r.Bytes()...)
 			ch <- line
 		}
 		close(ch)
-	}(e.out, bufio.NewScanner(stdout))
+		c.Wait() // reap: the service may exit on its own after being idle
+	}(e.out, bufio.NewScanner(stdout), cmd)
 	if e.verbose {
 		logf("engine: %s (pid %d)", e.digup, cmd.Process.Pid)
 	}
