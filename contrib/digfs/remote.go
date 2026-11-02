@@ -602,3 +602,33 @@ func (t *tree) restoreShares() {
 		}
 	}
 }
+
+// syncLoop keeps mounted shares current.  A share that is already working is
+// skipped rather than queued twice; refresh() serializes the rest.
+func (t *tree) syncLoop(every time.Duration) {
+	for range time.Tick(every) {
+		t.mu.Lock()
+		shares := make([]*share, 0, len(t.shares))
+		for _, sh := range t.shares {
+			shares = append(shares, sh)
+		}
+		t.mu.Unlock()
+		for _, sh := range shares {
+			sh.mu.Lock()
+			busy := sh.state == "refreshing" || sh.state == "indexing"
+			sh.mu.Unlock()
+			if busy {
+				continue
+			}
+			go func(sh *share) {
+				if _, _, _, err := sh.refresh("", t.maxFetch, skipDirs); err != nil {
+					eventf("sync %s: %v", sh.name, err)
+					return
+				}
+				if err := t.indexShare(sh.name, ""); err != nil {
+					eventf("sync %s: %v", sh.name, err)
+				}
+			}(sh)
+		}
+	}
+}

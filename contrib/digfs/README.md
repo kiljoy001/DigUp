@@ -90,12 +90,12 @@ export, a Harvey `/srv` service — can be mounted, browsed and indexed:
 ```
 echo 'mount papers tcp!192.168.2.9!5640 /home/me/papers' >> ctl
 ls /mnt/papers                       # live: nothing is copied
-echo 'refresh papers' >> ctl         # mirror it into the cache
-echo 'index papers' >> ctl           # run the indexer over the mirror
+echo 'sync papers' >> ctl            # refresh, then index what changed
 ```
 
-`/mnt/<name>/` is the remote tree itself, walked through digfs. `refresh`
-copies files whose size or modification time changed into
+`/mnt/<name>/` is the remote tree itself, walked through digfs. `sync`
+refreshes and indexes in one step (`refresh` and `index` are the two halves);
+it copies files whose size or modification time changed into
 `~/.cache/digfs/fs/<name>/` — the indexer reads local paths, so the mirror is
 what makes a remote tree indexable. `.git`, `.hg`, `.svn` and `node_modules`
 are skipped, and files over `-maxfetch` (256 MB) are left alone.
@@ -127,6 +127,9 @@ looks like a code project (a `.git`, `Package.swift`, a Go module) is skipped
 unless you index its directory directly or pass `--include-code` to the
 indexer. Refreshes for one share queue rather than fail, so a script can ask
 for several subtrees in a row.
+
+`-sync 15m` runs the same thing for every mounted share on a timer, skipping
+a share that is already working.
 
 Mounts persist: `<cache>/shares.conf` holds `name \t address \t path` and
 digfs re-dials them at startup, so the namespace comes back with the

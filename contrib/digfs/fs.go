@@ -253,6 +253,7 @@ ctl commands:
 	                               mount a 9P server; it appears at /mnt/<name>
 	umount <name>
 	refresh <name> [path]          mirror remote files into the cache
+	sync <name> [path]             refresh, then index what changed
 	index <name> [path]            run the indexer over the mirror
 	forget <name>                  drop the mirror and its units from the index
 
@@ -365,9 +366,9 @@ func (t *tree) control(line string) error {
 			return fmt.Errorf("usage: umount <name>")
 		}
 		return t.umount(f[1])
-	case "refresh":
+	case "refresh", "sync":
 		if len(f) < 2 {
-			return fmt.Errorf("usage: refresh <name> [path]")
+			return fmt.Errorf("usage: %s <name> [path]", f[0])
 		}
 		sub := ""
 		if len(f) > 2 {
@@ -382,6 +383,12 @@ func (t *tree) control(line string) error {
 		go func() {
 			if _, _, _, err := sh.refresh(sub, t.maxFetch, skipDirs); err != nil {
 				eventf("refresh %s: %v", sh.name, err)
+				return
+			}
+			if f[0] == "sync" {
+				if err := t.indexShare(sh.name, sub); err != nil {
+					eventf("sync %s: %v", sh.name, err)
+				}
 			}
 		}()
 		return nil

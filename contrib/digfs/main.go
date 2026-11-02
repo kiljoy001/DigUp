@@ -67,15 +67,16 @@ func logf(format string, a ...any) {
 
 func main() {
 	var (
-		addr     = flag.String("a", "tcp!127.0.0.1!5640", "9P address, net!host!port (host * for every interface)")
-		webAddr  = flag.String("w", "", "HTML address, net!host!port; empty disables it")
-		digup    = flag.String("digup", "digup", "the digup binary")
-		index    = flag.String("index", "", "index folder (digup's default when empty)")
-		models   = flag.String("models", "", "DIGUP_MODELS for the engine")
-		clean    = flag.Bool("cleanenv", false, "run digup without LD_LIBRARY_PATH (when another llama.cpp shadows its own)")
-		maxq     = flag.Int("maxq", 100, "most hits a single query may ask for")
-		cache    = flag.String("cache", defaultCache(), "where mounted shares are mirrored")
-		maxFetch = flag.Int64("maxfetch", 256<<20, "largest file a refresh will copy, in bytes")
+		addr      = flag.String("a", "tcp!127.0.0.1!5640", "9P address, net!host!port (host * for every interface)")
+		webAddr   = flag.String("w", "", "HTML address, net!host!port; empty disables it")
+		digup     = flag.String("digup", "digup", "the digup binary")
+		index     = flag.String("index", "", "index folder (digup's default when empty)")
+		models    = flag.String("models", "", "DIGUP_MODELS for the engine")
+		clean     = flag.Bool("cleanenv", false, "run digup without LD_LIBRARY_PATH (when another llama.cpp shadows its own)")
+		maxq      = flag.Int("maxq", 100, "most hits a single query may ask for")
+		cache     = flag.String("cache", defaultCache(), "where mounted shares are mirrored")
+		maxFetch  = flag.Int64("maxfetch", 256<<20, "largest file a refresh will copy, in bytes")
+		syncEvery = flag.Duration("sync", 0, "refresh and index every mounted share this often (0 = only on request)")
 	)
 	var roots rootsFlag
 	flag.Var(&roots, "root", "an indexed folder (repeatable; for the HTML view's file links)")
@@ -131,6 +132,10 @@ func main() {
 				logf("web: %v", err)
 			}
 		}()
+	}
+
+	if *syncEvery > 0 {
+		go t.syncLoop(*syncEvery)
 	}
 
 	logf("index %s, %d roots", *index, len(t.roots))
