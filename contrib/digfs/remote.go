@@ -28,6 +28,7 @@ type share struct {
 	cache    string
 
 	mu          sync.Mutex
+	refreshMu   sync.Mutex
 	state       string
 	when        time.Time
 	lastRefresh time.Time
@@ -220,12 +221,11 @@ var skipDirs = map[string]bool{
 // refresh mirrors sub (relative to the attach point) into the cache.  Files
 // whose size and modification time already match are left alone.
 func (sh *share) refresh(sub string, maxFile int64, skip map[string]bool) (int64, int64, int64, error) {
+	// Refreshes queue rather than fail: asking for two subtrees in a row from
+	// a script should mirror both.
+	sh.refreshMu.Lock()
+	defer sh.refreshMu.Unlock()
 	sh.mu.Lock()
-	if sh.state == "refreshing" || sh.state == "indexing" {
-		state := sh.state
-		sh.mu.Unlock()
-		return 0, 0, 0, fmt.Errorf("%s is %s", sh.name, state)
-	}
 	sh.state = "refreshing"
 	sh.mu.Unlock()
 	defer func() {
@@ -301,7 +301,7 @@ func (sh *share) refresh(sub string, maxFile int64, skip map[string]bool) (int64
 		firstErr = perr
 	}
 
-	mfiles, mbytes := mirrorStats(filepath.Join(sh.cache, base))
+	mfiles, mbytes := mirrorStats(sh.cache)
 
 	sh.mu.Lock()
 	sh.files = mfiles

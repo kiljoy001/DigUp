@@ -119,6 +119,15 @@ is deleted from the mirror, and empty directories go with it, so the next
 walked — `.git`, an unreadable directory, anything over `-maxfetch` — are
 kept rather than guessed at.
 
+`forget <name>` empties the mirror and indexes the empty directory, which is
+how the units of a share leave the index without touching the server.
+
+The indexer's own rules still apply to what it is given: a mounted tree that
+looks like a code project (a `.git`, `Package.swift`, a Go module) is skipped
+unless you index its directory directly or pass `--include-code` to the
+indexer. Refreshes for one share queue rather than fail, so a script can ask
+for several subtrees in a row.
+
 Mounts persist: `<cache>/shares.conf` holds `name \t address \t path` and
 digfs re-dials them at startup, so the namespace comes back with the
 process. The connections are the only live state; everything else is on

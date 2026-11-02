@@ -254,6 +254,7 @@ ctl commands:
 	umount <name>
 	refresh <name> [path]          mirror remote files into the cache
 	index <name> [path]            run the indexer over the mirror
+	forget <name>                  drop the mirror and its units from the index
 
 q/ holds one directory per query, numbered in order; q/newest is the last one.
 Each query directory has:
@@ -381,6 +382,27 @@ func (t *tree) control(line string) error {
 		go func() {
 			if _, _, _, err := sh.refresh(sub, t.maxFetch, skipDirs); err != nil {
 				eventf("refresh %s: %v", sh.name, err)
+			}
+		}()
+		return nil
+	case "forget":
+		if len(f) != 2 {
+			return fmt.Errorf("usage: forget <name>")
+		}
+		t.mu.Lock()
+		sh, ok := t.shares[f[1]]
+		t.mu.Unlock()
+		if !ok {
+			return fmt.Errorf("%s is not mounted", f[1])
+		}
+		go func() {
+			n, err := pruneMirror(sh.cache, map[string]bool{}, nil)
+			if err != nil {
+				eventf("forget %s: %v", sh.name, err)
+			}
+			eventf("forget %s: %d files dropped from the mirror", sh.name, n)
+			if err := t.indexShare(sh.name, ""); err != nil {
+				eventf("forget %s: %v", sh.name, err)
 			}
 		}()
 		return nil
