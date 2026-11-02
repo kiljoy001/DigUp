@@ -1,0 +1,95 @@
+// digfs serves a digup index as a 9P filesystem whose query results are
+// directories of real files, and renders the same tree as HTML.
+//
+// It owns no index and no model: it asks `digup search-service` questions and
+// makes the answers walkable.
+package main
+
+import (
+	"flag"
+	"fmt"
+	"os"
+	"os/exec"
+	"os/signal"
+	"strings"
+	"syscall"
+	"time"
+)
+
+type rootsFlag []string
+
+func (r *rootsFlag) String() string { return strings.Join(*r, ",") }
+func (r *rootsFlag) Set(v string) error {
+	*r = append(*r, v)
+	return nil
+}
+
+var verbose bool
+
+func logf(format string, a ...any) {
+	fmt.Fprintf(os.Stderr, "digfs %s ", time.Now().Format("15:04:05"))
+	fmt.Fprintf(os.Stderr, format, a...)
+	fmt.Fprintln(os.Stderr)
+}
+
+func main() {
+	var (
+		addr    = flag.String("a", "tcp!127.0.0.1!5640", "9P address, net!host!port (host * for every interface)")
+		webAddr = flag.String("w", "", "HTML address, net!host!port; empty disables it")
+		digup   = flag.String("digup", "digup", "the digup binary")
+		index   = flag.String("index", "", "index folder (digup's default when empty)")
+		models  = flag.String("models", "", "DIGUP_MODELS for the engine")
+		clean   = flag.Bool("cleanenv", false, "run digup without LD_LIBRARY_PATH (when another llama.cpp shadows its own)")
+		maxq    = flag.Int("maxq", 100, "most hits a single query may ask for")
+	)
+	var roots rootsFlag
+	flag.Var(&roots, "root", "an indexed folder (repeatable; for the HTML view's file links)")
+	flag.BoolVar(&verbose, "v", false, "log each connection")
+	flag.Parse()
+
+	if !strings.Contains(*digup, "/") {
+		if p, err := exec.LookPath(*digup); err == nil {
+			*digup = p
+		}
+	}
+
+	eng := &engine{
+		digup: *digup, index: *index, roots: roots, models: *models,
+		cleanEnv: *clean, verbose: verbose,
+	}
+	t := &tree{eng: eng, roots: roots, maxQ: *maxq, started: time.Now()}
+	t.build()
+
+	// The HTML view only serves files it can prove are indexed. Ask the engine
+	// for the folders when none were named.
+	if len(t.roots) == 0 {
+		if s, err := eng.Summaries(); err == nil {
+			for _, r := range s.Roots {
+				t.roots = append(t.roots, r.Path)
+			}
+		}
+	}
+
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		s := &server{tree: t}
+		if err := s.listen(*addr); err != nil {
+			logf("9p: %v", err)
+			sig <- syscall.SIGTERM
+		}
+	}()
+	if *webAddr != "" {
+		go func() {
+			w := &web{t: t, roots: t.roots}
+			if err := w.listen(*webAddr); err != nil {
+				logf("web: %v", err)
+			}
+		}()
+	}
+
+	logf("index %s, %d roots", *index, len(t.roots))
+	<-sig
+	eng.stop()
+}
