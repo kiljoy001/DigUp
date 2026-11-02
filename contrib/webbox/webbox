@@ -132,6 +132,28 @@ a{color:var(--accent)}
              display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
 .hit .more a{font:600 .85rem/1 var(--sans)}
 .hit + .doc{margin-top:.7rem}
+.md{margin:1rem 0 0;padding:1.1rem 1.25rem;background:var(--code);border:1px solid var(--line);
+    border-radius:12px;font:15px/1.65 var(--sans)}
+.md > :first-child{margin-top:0}
+.md > :last-child{margin-bottom:0}
+.md h1,.md h2,.md h3,.md h4,.md h5,.md h6{font-family:var(--sans);line-height:1.3;
+    margin:1.5rem 0 .5rem;letter-spacing:-.01em}
+.md h1{font-size:1.4rem}
+.md h2{font-size:1.15rem;padding-bottom:.3rem;border-bottom:1px solid var(--line)}
+.md h3{font-size:1rem}
+.md h4,.md h5,.md h6{font-size:.95rem}
+.md p{margin:.7rem 0}
+.md ul,.md ol{margin:.6rem 0;padding-left:1.4rem}
+.md li{margin:.25rem 0}
+.md blockquote{margin:.9rem 0;padding:.2rem 0 .2rem 1rem;border-left:3px solid var(--accent);
+    color:var(--muted)}
+.md code{font:12.5px/1.5 var(--mono);background:var(--card);border:1px solid var(--line);
+    border-radius:5px;padding:.1rem .3rem}
+.md pre.code{background:var(--card);border:1px solid var(--line);border-radius:8px;
+    padding:.8rem 1rem;overflow:auto;margin:.9rem 0}
+.md pre.code code{background:none;border:0;padding:0;font-size:12.5px;line-height:1.6}
+.md a{color:var(--accent)}
+.md hr{border:0;border-top:1px solid var(--line);margin:1.4rem 0}
 .recent{margin:2.5rem 0 0}
 .recent h2{font-size:.75rem;text-transform:uppercase;letter-spacing:.09em;color:var(--muted);
            margin:0 0 .5rem;font-weight:600}
@@ -189,6 +211,22 @@ EOF
 <footer class="foot">
   <span>webbox</span><span>·</span><a href="/f/">files</a><span>·</span><a href="/">home</a>
 </footer>
+<script src="/mkd.js"></script>
+<script>
+(function(){
+  if(typeof mkd === 'undefined')
+    return;
+  var list = document.querySelectorAll('pre.markdown');
+  for(var i = 0; i < list.length; i++){
+    var pre = list[i];
+    var div = document.createElement('div');
+    div.className = 'md';
+    pre.parentNode.insertBefore(div, pre.nextSibling);
+    pre.style.display = 'none';
+    new mkd(pre, div).draw();
+  }
+})();
+</script>
 </body>
 </html>
 EOF
@@ -282,7 +320,13 @@ END{
 	if(score != "") printf "<span class=\"chip\"><b>score</b> %s</span>", esc(score)
 	if(kind != "") printf "<span class=\"chip\">%s</span>", esc(kind)
 	print "</div>"
-	if(snippet != "") printf "<p class=\"snippet\">%s…</p>", esc(snippet)
+	if(snippet != ""){
+		gsub(/\*\*/, "", snippet)
+		gsub(/`+/, "", snippet)
+		gsub(/#+[ \t]+/, "", snippet)
+		gsub(/^[ \t]*>[ \t]?/, "", snippet)
+		printf "<p class=\"snippet\">%s…</p>", esc(snippet)
+	}
 	printf "<p class=\"more\"><a href=\"/f%s/%s\">Read the passage</a></p></article>\n", q, f
 }
 EOF
@@ -339,12 +383,22 @@ echo '<button class="button" type="submit">search</button></form>'
 if(test -f $d/summary)
 	echo '<p class="meta">strong' $strong '·' $timing '</p>'
 
+errmsg=0
+if(test -f $d/summary){
+	if(grep '^error:' $d/summary >/dev/null){
+		errmsg=1
+		echo -n '<p class="meta">the search failed: '
+		grep '^error:' $d/summary | sed 's/^error: //' | /n/webbox/bin/esc1
+		echo '</p>'
+	}
+}
+
 echo '<div class="hits">'
 for(f in `{ls $d | sed 's|.*/||' | grep '^[0-9][0-9]-'})
 	awk -v 'q='$pat -v 'f='$f -f /n/webbox/bin/hitcard.awk $d^'/'^$f
 echo '</div>'
 
-if(~ $hits 0)
+if(~ $hits 0 && ~ $errmsg 0)
 	echo '<p class="empty">Nothing matched. Try fewer words, or a broader phrase.</p>'
 
 /n/webbox/bin/recent
@@ -410,18 +464,20 @@ echo $pat | awk -f /n/webbox/bin/crumbs.awk
 if(test -f $f){
 	name=`{basename $f}
 	ename=`{echo $name | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g'}
+	mdclass=''
+	~ $name *.md && mdclass=' markdown'
 	echo '<div class="head"><h1 class="title">'^$ename^'</h1><span>'
 	parent=`{basename -d $pat}
 	~ $parent /q/* && echo '<a class="button ghost" href="/f'^$parent^'/">back to results</a> '
 	echo '<a class="button ghost" href="/files'^$base^'">download</a></span></div>'
 	if(grep '^path: ' $f >/dev/null && grep '^---$' $f >/dev/null){
 		awk -f /n/webbox/bin/hitmeta.awk $f
-		echo '<pre class="doc">'
+		echo '<pre class="doc'^$mdclass^'">'
 		sed '1,/^---$/d' $f | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g'
 		echo '</pre>'
 	}
 	if not {
-		echo '<pre class="doc">'
+		echo '<pre class="doc'^$mdclass^'">'
 		sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g' $f
 		echo '</pre>'
 	}
@@ -500,6 +556,7 @@ EOF
 
 	bind $webbox/namespace.httpd /lib/namespace.httpd
 	chmod +x $webbox/bin/*
+	test -f /lib/webbox/mkd.js && cp /lib/webbox/mkd.js $webbox/web/mkd.js
 
 	# The browser mode's static home, when this is not a digfs tree.
 	if(~ $digfs 0){
