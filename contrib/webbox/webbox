@@ -1,0 +1,391 @@
+#!/bin/rc
+
+# webbox - browse a directory as a web page.
+#
+# Forked from sirjofri's webbox (https://shithub.us/sirjofri/webbox) and
+# restyled: a light/dark palette, a real file listing, and a metadata card
+# for digfs query results (a file that begins with "path:" and has a "---"
+# line).  Same URL surface: /, /f/..., /files/..., /snarf, /dosnarf.html,
+# /doplumb.html.
+#
+#	webbox [port] [folder]
+
+rfork en
+
+test -x /bin/urldecode || {
+	echo missing urldecode >[1=2]
+	exit 'missing urldecode'
+}
+
+test -x /bin/tcp80 || {
+	echo missing tcp80 >[1=2]
+	exit 'missing tcp80'
+}
+
+port=8080
+~ $1 '' || port=$1
+folder=/
+~ $2 '' || {
+	test -d $2 && folder=$2
+}
+
+echo webbox configuration:
+echo - exposing folder: $folder
+echo - port: $port
+
+webbox=/n/webbox
+
+fn bootstrap {
+	# The stylesheet and the shell of every page.  The heredoc is
+	# unquoted so $sysname expands; keep "$" and backticks out of the CSS.
+	# The first byte must be the newline that ends tcp80's header block:
+	# a rule's CGI writes straight to the connection after headers().
+	cat <<EOF >$webbox/header.html
+
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
+<title>webbox</title>
+<style>
+:root{
+  --bg:#faf8f4; --fg:#1b1c1e; --muted:#71727a; --line:#e4e0d7;
+  --card:#ffffff; --code:#f3f0e9; --accent:#2d6a4f; --accent-2:#e7f0ea;
+  --shadow:0 1px 2px rgba(20,20,20,.05);
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#101113; --fg:#e9e7e2; --muted:#9a9aa1; --line:#26282e;
+    --card:#17191d; --code:#0b0c0f; --accent:#8fd6ae; --accent-2:#1b2a23;
+    --shadow:none;
+  }
+}
+*{box-sizing:border-box}
+html{color-scheme:light dark;-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.65 var(--sans);
+     min-height:100vh;display:flex;flex-direction:column}
+.wrap{flex:1}
+a{color:var(--accent)}
+.bar{position:sticky;top:0;z-index:5;display:flex;align-items:center;justify-content:space-between;
+     padding:.65rem 1.25rem;background:var(--bg);border-bottom:1px solid var(--line)}
+.brand{display:flex;align-items:center;gap:.55rem;font-weight:650;letter-spacing:-.01em;
+       color:var(--fg);text-decoration:none}
+.mark{width:.85rem;height:.85rem;border-radius:3px;background:var(--accent)}
+.host{font:12px/1 var(--mono);color:var(--muted)}
+.wrap{width:100%;max-width:56rem;margin:0 auto;padding:1.4rem 1.25rem 4rem}
+.crumbs{display:flex;flex-wrap:wrap;align-items:center;gap:.15rem;margin:.4rem 0 1rem;
+        font:13px/1 var(--mono)}
+.crumbs a{color:var(--muted);text-decoration:none;padding:.3rem .4rem;border-radius:6px}
+.crumbs a:hover{color:var(--accent);background:var(--accent-2)}
+.crumbs .sep{color:var(--muted);opacity:.5}
+.head{display:flex;align-items:baseline;justify-content:space-between;gap:1rem;margin:.2rem 0 1rem}
+.title{font:600 1.35rem/1.25 var(--mono);margin:0;letter-spacing:-.01em;overflow-wrap:anywhere}
+.count{font:11px/1 var(--mono);color:var(--muted);text-transform:uppercase;letter-spacing:.06em;
+       border:1px solid var(--line);border-radius:999px;padding:.35rem .6rem;white-space:nowrap}
+.files{list-style:none;margin:0;padding:0;background:var(--card);border:1px solid var(--line);
+       border-radius:12px;overflow:hidden;box-shadow:var(--shadow)}
+.files .row{display:flex;align-items:center;gap:.8rem;padding:.7rem 1rem;
+            border-top:1px solid var(--line)}
+.files .row:first-child{border-top:0}
+.files .row:hover{background:var(--accent-2)}
+.files .name{flex:1;text-decoration:none;color:var(--fg);font:14px/1.35 var(--mono);
+             overflow-wrap:anywhere}
+.files .dir .name{font-weight:600}
+.files .dir .name::before{content:"";display:inline-block;width:.5rem;height:.5rem;
+  margin-right:.6rem;border-left:2px solid var(--muted);border-bottom:2px solid var(--muted);
+  transform:rotate(-45deg) translateY(-1px)}
+.files .raw{flex:none;font:11px/1 var(--mono);letter-spacing:.04em;text-transform:uppercase;
+            color:var(--muted);text-decoration:none;border:1px solid var(--line);
+            border-radius:999px;padding:.35rem .6rem}
+.files .raw:hover{color:var(--accent);border-color:var(--accent)}
+.doc{margin:1rem 0 0;padding:1.1rem 1.25rem;background:var(--code);border:1px solid var(--line);
+     border-radius:12px;font:13.5px/1.7 var(--mono);white-space:pre-wrap;
+     overflow-wrap:anywhere;tab-size:4}
+.hit{margin:1rem 0 0;padding:1rem 1.1rem;background:var(--card);border:1px solid var(--line);
+     border-radius:12px;box-shadow:var(--shadow)}
+.hit .where{font:600 14px/1.5 var(--mono);overflow-wrap:anywhere}
+.hit .where .share{color:var(--accent)}
+.hit .where .path{color:var(--fg)}
+.hit .chips{display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.65rem}
+.chip{font:11px/1 var(--mono);color:var(--muted);border:1px solid var(--line);
+      border-radius:999px;padding:.35rem .6rem;white-space:nowrap}
+.chip b{color:var(--fg);font-weight:600}
+.hit + .doc{margin-top:.7rem}
+.hero{padding:1.2rem 0 1.6rem}
+.hero h1{font-size:1.7rem;line-height:1.2;margin:0 0 .4rem;letter-spacing:-.02em}
+.hero p{margin:0;color:var(--muted)}
+.grid{display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(16rem,1fr))}
+.card{padding:1.1rem;background:var(--card);border:1px solid var(--line);
+      border-radius:12px;box-shadow:var(--shadow)}
+.card h2{font-size:.95rem;margin:0 0 .35rem}
+.card p{font-size:.9rem;color:var(--muted);margin:0 0 .9rem}
+.button{display:inline-block;padding:.5rem .8rem;border:0;border-radius:8px;
+        background:var(--accent);color:#fff;font:600 .88rem/1 var(--sans);
+        text-decoration:none;cursor:pointer}
+.button.ghost{background:transparent;color:var(--accent);border:1px solid var(--accent)}
+textarea{width:100%;min-height:7.5rem;padding:.7rem;border:1px solid var(--line);
+         border-radius:8px;background:var(--code);color:var(--fg);
+         font:13px/1.5 var(--mono);resize:vertical}
+.foot{margin:3rem auto 2rem;max-width:56rem;padding:0 1.25rem;color:var(--muted);
+      font:12px/1 var(--mono);display:flex;gap:.5rem;flex-wrap:wrap}
+.empty{color:var(--muted);padding:2rem 0}
+@media (max-width:40rem){
+  .wrap{padding:1rem .8rem 3rem}
+  .bar{padding:.55rem .8rem}
+  .title{font-size:1.15rem}
+  .files .row{padding:.65rem .8rem}
+}
+</style>
+</head>
+<body>
+<header class="bar">
+  <a class="brand" href="/"><span class="mark"></span>webbox</a>
+  <span class="host">$sysname</span>
+</header>
+<main class="wrap">
+EOF
+
+	echo `{basename $folder} >$webbox/folder.name
+
+	cat <<'EOF' >$webbox/footer.html
+</main>
+<footer class="foot">
+  <span>webbox</span><span>·</span><a href="/f/">files</a><span>·</span><a href="/">home</a>
+</footer>
+</body>
+</html>
+EOF
+
+	cat <<'EOF' >$webbox/bin/crumbs.awk
+{
+	n = split($0, a, "/")
+	printf "<nav class=\"crumbs\"><a href=\"/f/\">root</a>"
+	cum = ""
+	for(i = 1; i <= n; i++){
+		if(a[i] == "")
+			continue
+		cum = cum "/" a[i]
+		printf "<span class=\"sep\">/</span><a href=\"/f%s\">%s</a>", cum, a[i]
+	}
+	print "</nav>"
+}
+EOF
+
+	# The metadata card for a digfs result: path, share, unit, score.
+	cat <<'EOF' >$webbox/bin/hitmeta.awk
+function esc(s){
+	gsub(/&/, "\\&amp;", s)
+	gsub(/</, "\\&lt;", s)
+	gsub(/>/, "\\&gt;", s)
+	return s
+}
+/^path: /{path = substr($0, 7)}
+/^share: /{share = substr($0, 8)}
+/^kind: /{kind = substr($0, 7)}
+/^unit: /{unit = substr($0, 7)}
+/^score: /{score = substr($0, 8)}
+/^file: /{file = substr($0, 7)}
+END{
+	printf "<section class=\"hit\"><div class=\"where\">"
+	if(share != "")
+		printf "<span class=\"share\">%s</span><span class=\"path\">%s</span>", esc(share), esc(substr(path, length(share) + 1))
+	else
+		printf "<span class=\"path\">%s</span>", esc(path)
+	print "</div><div class=\"chips\">"
+	if(unit != "") printf "<span class=\"chip\"><b>unit</b> %s</span>", esc(unit)
+	if(score != ""){
+		split(score, s, " ")
+		printf "<span class=\"chip\"><b>score</b> %s</span>", esc(s[1])
+	}
+	if(kind != "") printf "<span class=\"chip\">%s</span>", esc(kind)
+	if(file != "") printf "<span class=\"chip\">%s</span>", esc(file)
+	print "</div></section>"
+}
+EOF
+
+	cat <<'EOF' >$webbox/bin/list
+#!/bin/rc
+pat='/'^$1
+pat=`{echo $pat | sed 's://:/:g;s:/$::'}
+~ $pat '' && pat='/'
+root=/usr/web/files
+base=$pat
+~ $pat '/' && base=''
+d=$root^$base
+f=$d
+
+cat /n/webbox/header.html
+
+echo $pat | awk -f /n/webbox/bin/crumbs.awk
+
+if(test -f $f){
+	name=`{basename $f}
+	ename=`{echo $name | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g'}
+	echo '<div class="head"><h1 class="title">'^$ename^'</h1>'
+	echo '<a class="button ghost" href="/files'^$base^'">download</a></div>'
+	if(grep '^path: ' $f >/dev/null && grep '^---$' $f >/dev/null){
+		awk -f /n/webbox/bin/hitmeta.awk $f
+		echo '<pre class="doc">'
+		sed '1,/^---$/d' $f | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g'
+		echo '</pre>'
+	}
+	if not {
+		echo '<pre class="doc">'
+		sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g' $f
+		echo '</pre>'
+	}
+}
+if not {
+	kids=`{ls $d}
+	title=$pat
+	~ $pat '/' && title=`{cat /n/webbox/folder.name}
+	echo '<div class="head"><h1 class="title">'^$title^'</h1><span class="count">'^$#kids^' items</span></div>'
+	if(~ $#kids 0){
+		echo '<p class="empty">Nothing here.</p>'
+	}
+	if not {
+		echo '<ul class="files">'
+		for(x in $kids){
+			n=`{basename $x}
+			e=`{echo $n | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g'}
+			if(test -d $d^'/'^$n)
+				echo '<li class="row dir"><a class="name" href="/f'^$base^'/'^$n^'">'^$e^'/</a></li>'
+			if not
+				echo '<li class="row"><a class="name" href="/f'^$base^'/'^$n^'">'^$e^'</a><a class="raw" href="/files'^$base^'/'^$n^'">raw</a></li>'
+		}
+		echo '</ul>'
+	}
+}
+
+cat /n/webbox/footer.html
+EOF
+
+	cat <<'EOF' >$webbox/bin/snarf
+#!/bin/rc
+echo -n $1 | urldecode >/dev/snarf
+cat /n/webbox/header.html
+cat <<'HTML'
+<div class="head"><h1 class="title">Snarfed</h1></div>
+<section class="card"><p>The text is in /dev/snarf. With javascript you are taken back home.</p>
+<p><a class="button" href="/">Back to webbox</a></p></section>
+<script>setTimeout(() => location.replace("/"), 600)</script>
+HTML
+cat /n/webbox/footer.html
+EOF
+
+	cat <<'EOF' >$webbox/bin/plumb
+#!/bin/rc
+echo -n $1 | urldecode | plumb -i
+cat /n/webbox/header.html
+cat <<'HTML'
+<div class="head"><h1 class="title">Plumbed</h1></div>
+<section class="card"><p>The text was sent to plumber(4). With javascript you are taken back home.</p>
+<p><a class="button" href="/">Back to webbox</a></p></section>
+<script>setTimeout(() => location.replace("/"), 600)</script>
+HTML
+cat /n/webbox/footer.html
+EOF
+
+	cat $webbox/header.html >$webbox/web/index.html
+	echo '<section class="hero"><h1>Files, as a web page.</h1><p>'^$folder^' on '^$sysname^', over tcp80 and tlssrv.</p></section>' >>$webbox/web/index.html
+	cat <<'HTML' >>$webbox/web/index.html
+<div class="grid">
+  <section class="card">
+    <h2>Browse</h2>
+    <p>Walk the folder one directory at a time; every file has a raw link.</p>
+    <a class="button" href="/f/">Open files</a>
+  </section>
+  <section class="card" id="snarf_nojs">
+    <h2>Snarf</h2>
+    <p>Put text into /dev/snarf, or hand it to the plumber.</p>
+    <form action="/dosnarf.html" method="GET">
+      <textarea name="d" id="d" placeholder="Text to snarf"></textarea>
+      <p style="margin:.6rem 0 0">
+        <input type="submit" value="snarf" class="button">
+        <button type="submit" formaction="/doplumb.html" class="button ghost">plumb</button>
+      </p>
+    </form>
+  </section>
+  <section class="card" id="snarf_js" style="display:none">
+    <h2>Snarf</h2>
+    <p>Copy the snarf buffer to the clipboard, or the clipboard into it.</p>
+    <p>
+      <button class="button" onclick="copySnarf()">copy snarf</button>
+      <button class="button ghost" onclick="sendSnarf()">snarf</button>
+      <button class="button ghost" onclick="sendPlumb()">plumb</button>
+    </p>
+    <p id="status" class="empty" style="padding:0"></p>
+    <script>
+    function status(t){ document.getElementById("status").innerText = t }
+    function copySnarf(){
+      fetch("/snarf").then(r => r.text()).then(t => {
+        navigator.clipboard.writeText(t); status("copied")
+      }).catch(() => status("failed"))
+    }
+    function post(path, text){
+      return fetch(path + "?d=" + encodeURIComponent(text))
+    }
+    function sendSnarf(){
+      navigator.clipboard.readText().then(t => post("/dosnarf.html", t)).then(() => status("snarfed"))
+        .catch(() => status("failed"))
+    }
+    function sendPlumb(){
+      navigator.clipboard.readText().then(t => post("/doplumb.html", t)).then(() => status("plumbed"))
+        .catch(() => status("failed"))
+    }
+    document.getElementById("snarf_nojs").style.display = "none"
+    document.getElementById("snarf_js").style.display = ""
+    </script>
+  </section>
+</div>
+HTML
+	cat $webbox/footer.html >>$webbox/web/index.html
+
+	cat <<'EOF' >$webbox/rules
+/dosnarf.html\?d=(.*)	$webbox/bin/snarf	'\1'
+/doplumb.html\?d=(.*)	$webbox/bin/plumb	'\1'
+/f/(.*)	$webbox/bin/list '\1'
+EOF
+
+	cat <<'EOF' >$webbox/namespace.httpd
+# empty
+EOF
+
+	bind $webbox/namespace.httpd /lib/namespace.httpd
+	chmod +x $webbox/bin/*
+
+}
+
+fn prephttps {
+	auth/factotum -n
+	auth/rsagen -t 'service=tls role=client owner=*' > $webbox/sec/key
+	auth/rsa2x509 'C=US' $webbox/sec/key | auth/pemencode CERTIFICATE > $webbox/sec/cert.pem
+	cat $webbox/sec/key > /mnt/factotum/ctl
+}
+
+aux/stub -d /usr/web
+
+ramfs -m $webbox
+mkdir -p $webbox/bin
+mkdir -p $webbox/web/files
+mkdir -p $webbox/sec
+mkdir -p $webbox/in
+
+bind $folder $webbox/web/files
+bind $webbox/web /usr/web
+aux/stub /usr/web/snarf
+bind /dev/snarf /usr/web/snarf
+
+bootstrap
+prephttps
+
+ipv4=`{ndb/query -m sys $sysname ip}
+ipv6=`{ndb/query -m sys $sysname ipv6}
+
+echo starting listener on 'tcp!*!'$port '(https)'
+echo - IPv4: $ipv4
+echo - IPv6: $ipv6
+aux/listen1 -t 'tcp!*!'$port /bin/tlssrv -c $webbox/sec/cert.pem /bin/tcp80 -r $webbox/rules

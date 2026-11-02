@@ -162,6 +162,11 @@ the `/HEAD/info.html`, the bare `/sirjofri` path is not served. It needs
 `urldecode(1)` and [tcp80](https://shithub.us/grobe0ba/tcp80/HEAD/info.html);
 both build with `mk install` on a 9front box.
 
+[`../webbox/`](../webbox/) is a restyled fork: dark mode, breadcrumbs, a
+real file listing, and a metadata card that recognises a digfs result
+(`path:` … `---`) and renders the share, unit and score above the passage.
+The URLs are unchanged, so it is a drop-in replacement.
+
 Verified end to end here: a 9front guest mounted this tree, ran webbox over
 `q/newest`, and the host fetched the rendered pages through a QEMU port
 forward.
