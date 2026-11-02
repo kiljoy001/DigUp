@@ -7,6 +7,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -156,7 +157,26 @@ func (e *engine) stop() {
 
 // request sends one op and waits for the reply carrying its id, skipping the
 // unsolicited {"event":...} lines the service writes while the encoder loads.
+// errEngineGone means the service stopped (it leaves after twice its encoder
+// idle time); the request is retried once against a fresh process.
+var errEngineGone = errors.New("the digup search service exited")
+
 func (e *engine) request(req map[string]any, timeout time.Duration) ([]byte, error) {
+	line, err := e.request1(req, timeout)
+	if err != errEngineGone {
+		return line, err
+	}
+	// The child may have exited on its own.  Drop it and try once more, which
+	// is what the next request from a client should do anyway.
+	if e.cmd != nil && e.cmd.Process != nil {
+		e.cmd.Process.Kill()
+	}
+	e.cmd = nil
+	time.Sleep(100 * time.Millisecond)
+	return e.request1(req, timeout)
+}
+
+func (e *engine) request1(req map[string]any, timeout time.Duration) ([]byte, error) {
 	if err := e.start(); err != nil {
 		return nil, err
 	}
@@ -170,11 +190,11 @@ func (e *engine) request(req map[string]any, timeout time.Duration) ([]byte, err
 	}
 	if _, err := e.in.Write(append(body, '\n')); err != nil {
 		e.cmd = nil
-		return nil, err
+		return nil, errEngineGone
 	}
 	if err := e.in.Flush(); err != nil {
 		e.cmd = nil
-		return nil, err
+		return nil, errEngineGone
 	}
 
 	deadline := time.After(timeout)
@@ -183,7 +203,7 @@ func (e *engine) request(req map[string]any, timeout time.Duration) ([]byte, err
 		case line, ok := <-e.out:
 			if !ok {
 				e.cmd = nil
-				return nil, fmt.Errorf("the digup search service exited")
+				return nil, errEngineGone
 			}
 			var probe struct {
 				ID    *int   `json:"id"`
