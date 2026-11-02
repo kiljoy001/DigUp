@@ -289,10 +289,23 @@ func (s *server) dispatch(typ uint8, r *rbuf, fids map[uint32]*fid, msize *uint3
 		if r.bad {
 			return Rerror, nil, errBadMsg
 		}
+		// aname is server-defined in 9P2000; here it is a path from the root,
+		// so a client that attaches to a subtree (v9fs's aname=, mount -a)
+		// gets that subtree rather than everything.
+		node := s.tree.root
 		if aname != "" && aname != "/" {
-			return Rerror, nil, errNotExist
+			for _, name := range splitPath(aname) {
+				next, err := node.walk(name)
+				if err != nil {
+					return Rerror, nil, err
+				}
+				node = next
+			}
+			if !node.dir {
+				return Rerror, nil, errNotDir
+			}
 		}
-		fids[f] = &fid{n: s.tree.root}
+		fids[f] = &fid{n: node}
 		w := &wbuf{}
 		qid(w, s.tree.root)
 		return Rattach, w.b, nil

@@ -153,51 +153,63 @@ was not watching stderr.
 The engine is started with the cache directory as one of its roots, so
 anything refreshed is searchable without restarting.
 
-## Presenting it: webbox
+## The web view
 
-[sirjofri's webbox](https://shithub.us/sirjofri/webbox) is a 9front rc
-script: give it a port and a folder, and it serves that folder as HTML over
-tcp80 CGI, with a raw link for every file and snarf/plumb for the text. The
-query directories are ordinary directories, so the presentation is a mount
-and a command:
+`-w` serves the index as a search page.  That is the whole UI: one box, the
+recent questions, a page of cards per query, and the passage behind each hit
+(Markdown rendered when the file was Markdown).  It needs nothing but digfs
+and the model.
+
+```sh
+./digfs -w 'tcp!*!8080' -root ~/notes
+```
+
+`http://localhost:8080/` — "Search the files on this machine by what's in
+them."  The pages are plain GETs; the only script is the Markdown renderer,
+and without it the passage is still there as text.  `/stats` and `/help` are
+text files, `/raw/<query>/<hit>` serves the original bytes when the file is
+under a `-root`, and `/q/<n>/paths` is the hit list for scripts.
+
+This is the extension, not a replacement for DigUp's own app: index with
+`digup index` (or the app) and point digfs at the same index.
+
+## One index across machines
+
+The point of the 9P side is not presentation: it is that another machine's
+files can feed the same index, and every hit says where it came from.
+
+```
+mount papers tcp!192.168.2.9!5640 /home/me/papers
+sync papers
+```
+
+`/machines` in the web view does the same with a form: name, address, path.
+The host runs any 9P server — another digfs, a 9front export, `exportfs` —
+and digfs copies changed files into its cache, runs the indexer over them,
+and tags each hit with `papers:/2026/foo.pdf`.  Nothing is written on the
+other machine.
+
+The path is walked by the client after attach, not taken from the attach
+name: 9P2000 leaves `aname` to the server, and a server that ignores it
+would look like success while exposing its whole export (this cost a 2.2 GB
+mirror of the wrong tree before it was fixed).
+
+### webbox, if you want a Plan 9 front end
+
+[sirjofri's webbox](https://shithub.us/sirjofri/webbox) is a 9front rc script
+that serves a folder over tcp80 CGI.  [`../webbox/`](../webbox/) is a fork
+with a **digfs mode**: mount this tree, point webbox at its root, and the
+same search page is served by 9front, with snarf/plumb for the text.  It is
+an alternative for people already in that world; nothing here depends on it.
 
 ```
 9fs tcp!indexhost!5650              # or: mount -a tcp!indexhost!5650 /n/dig
-webbox 8080 /n/dig/q/newest         # needs urldecode(1) and tcp80
+webbox 8080 /n/dig                 # needs urldecode(1) and tcp80
 ```
 
-`/f/q/newest/00-foo.md` shows the passage, `/files/...` the raw file. The
-built-in `-w` view remains the zero-dependency fallback.
-
-The source is at <https://shithub.us/sirjofri/webbox/HEAD/info.html> — note
-the `/HEAD/info.html`, the bare `/sirjofri` path is not served. It needs
-`urldecode(1)` and [tcp80](https://shithub.us/grobe0ba/tcp80/HEAD/info.html);
-both build with `mk install` on a 9front box.
-
-[`../webbox/`](../webbox/) is a fork with a **digfs mode**: point it at the
-root of this tree and the home page becomes a search box, `/search?q=…`
-writes to `ctl` and renders the answer, and a query directory is cards —
-share, path, unit, score, preview — each opening the passage.  Pointed at an
-ordinary directory it is still a file browser, now with breadcrumbs, dark
-mode, and a metadata card for files shaped like a result.
-
-Verified end to end here: a 9front guest mounted this tree, ran webbox over
-`q/newest`, and the host fetched the rendered pages through a QEMU port
-forward.
-
-```
-# 9front
-9fs tcp!10.0.2.2!5650
-echo 'search search results as files over 9P' > '/n/10.0.2.2!5650/ctl'
-webbox 8080 '/n/10.0.2.2!5650/q/newest'
-
-# host (QEMU user networking; add the forward over QMP)
-curl -k https://127.0.0.1:18080/f/
-curl -k https://127.0.0.1:18080/files/00-DESIGN.md
-```
-
-The listing comes back as `00-DESIGN.md … 05-pmic-bringup.md` with `/f/` and
-`/files/` links, and the raw link starts with `path: repo:/sigil/docs/…`.
+Verified end to end: a 9front guest mounted this tree, searched through its
+`ctl`, and rendered `/f/q/N/` as cards, while the host fetched the pages
+through a QEMU forward.
 
 ## What it is not
 

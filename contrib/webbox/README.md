@@ -3,6 +3,10 @@
 A fork of [sirjofri's webbox](https://shithub.us/sirjofri/webbox/HEAD/info.html):
 an rc script that serves a directory over `tcp80` (CGI) and `tlssrv`.
 
+digfs now has the same search page built in (`digfs -w :8080`), so this is
+**optional** — the Plan 9-native way to present the same tree, with
+snarf/plumb, for people who are already there.
+
 Upstream is readable but plain — a grey header, every link a lavender pill,
 a bulleted listing, and a file rendered as one undifferentiated `<pre>`.
 This fork keeps the same URLs (`/`, `/f/…`, `/files/…`, `/snarf`,

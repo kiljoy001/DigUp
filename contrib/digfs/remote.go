@@ -50,18 +50,36 @@ func (t *tree) mount(name, addr, aname string) (*share, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", addr, err)
 	}
-	fid, q, err := c.attach("digfs", aname)
+	// Attach at the root and walk the path ourselves.  9P2000 leaves aname to
+	// the server, and a server that ignores it would look like success while
+	// exposing the whole export: mount the wrong tree, index the wrong files.
+	fid, q, err := c.attach("digfs", "")
 	if err != nil {
 		c.close()
-		return nil, fmt.Errorf("%s: attach %q: %w", addr, aname, err)
+		return nil, fmt.Errorf("%s: attach: %w", addr, err)
 	}
 	if q.qtype&QTDIR == 0 {
 		c.close()
-		return nil, fmt.Errorf("%s: %q is not a directory", addr, aname)
+		return nil, fmt.Errorf("%s: root is not a directory", addr)
+	}
+	comps := splitPath(aname)
+	if len(comps) > 0 {
+		walked, werr := c.walk(fid, comps)
+		c.clunk(fid)
+		if werr != nil {
+			c.close()
+			return nil, fmt.Errorf("%s: %s: %w", addr, aname, werr)
+		}
+		fid = walked
 	}
 	info, err := c.stat(fid)
 	if err != nil {
 		info = p9dir{name: name, mode: DMDIR | 0555, qtype: QTDIR}
+	}
+	if !info.isDir() {
+		c.clunk(fid)
+		c.close()
+		return nil, fmt.Errorf("%s: %s is not a directory", addr, aname)
 	}
 	info.name = name // the namespace name is ours, not the server's root name
 	sh := &share{
@@ -99,6 +117,15 @@ func (t *tree) umount(name string) error {
 	t.saveShares()
 	eventf("umount %s", name)
 	return nil
+}
+
+// splitPath turns "/a/b" into ["a" "b"].
+func splitPath(p string) []string {
+	p = strings.Trim(p, "/")
+	if p == "" || p == "." {
+		return nil
+	}
+	return strings.Split(p, "/")
 }
 
 func (sh *share) comps(sub string) []string {

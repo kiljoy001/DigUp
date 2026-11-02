@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
@@ -124,5 +125,25 @@ func TestMirrorStats(t *testing.T) {
 	files, bytes := mirrorStats(dir)
 	if files != 2 || bytes != 8 {
 		t.Fatalf("files=%d bytes=%d, want 2 and 8", files, bytes)
+	}
+}
+
+// The parser is shipped twice: embedded here for the built-in view, and as a
+// file for webbox.  They are the same program; keep them the same bytes.
+func TestMarkdownCopiesMatch(t *testing.T) {
+	other, err := os.ReadFile("../webbox/mkd.js")
+	if err != nil {
+		t.Skip("webbox copy not present")
+	}
+	if !bytes.Equal(other, mkdJS) {
+		t.Fatal("contrib/digfs/mkd.js and contrib/webbox/mkd.js have drifted")
+	}
+}
+
+func TestHighlight(t *testing.T) {
+	got := highlight("…it «powers» the «long» board…")
+	want := "…it <b>powers</b> the <b>long</b> board…"
+	if got != want {
+		t.Fatalf("highlight = %q, want %q", got, want)
 	}
 }

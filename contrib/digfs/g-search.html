@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>power key long press</title>
+<style>
+:root{
+  --bg:#faf8f4; --fg:#1b1c1e; --muted:#71727a; --line:#e4e0d7;
+  --card:#ffffff; --code:#f3f0e9; --accent:#2d6a4f; --accent-2:#e7f0ea;
+  --shadow:0 1px 2px rgba(20,20,20,.05);
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#101113; --fg:#e9e7e2; --muted:#9a9aa1; --line:#26282e;
+    --card:#17191d; --code:#0b0c0f; --accent:#8fd6ae; --accent-2:#1b2a23;
+    --shadow:none;
+  }
+}
+*{box-sizing:border-box}
+html{color-scheme:light dark;-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.65 var(--sans);
+     min-height:100vh;display:flex;flex-direction:column}
+a{color:var(--accent)}
+.bar{position:sticky;top:0;z-index:5;display:flex;align-items:center;justify-content:space-between;
+     padding:.65rem 1.25rem;background:var(--bg);border-bottom:1px solid var(--line)}
+.brand{display:flex;align-items:center;gap:.55rem;font-weight:650;letter-spacing:-.01em;
+       color:var(--fg);text-decoration:none}
+.mark{width:.85rem;height:.85rem;border-radius:3px;background:var(--accent)}
+.host{font:12px/1 var(--mono);color:var(--muted)}
+.wrap{width:100%;max-width:56rem;margin:0 auto;padding:1.4rem 1.25rem 4rem;flex:1}
+.crumbs{display:flex;flex-wrap:wrap;align-items:center;gap:.15rem;margin:.4rem 0 1rem;
+        font:13px/1 var(--mono)}
+.crumbs a,.crumbs span{color:var(--muted);text-decoration:none;padding:.3rem .4rem;border-radius:6px}
+.crumbs a:hover{color:var(--accent);background:var(--accent-2)}
+.head{display:flex;align-items:baseline;justify-content:space-between;gap:1rem;margin:.2rem 0 1rem}
+.title{font:600 1.35rem/1.25 var(--mono);margin:0;letter-spacing:-.01em;overflow-wrap:anywhere}
+.count{font:11px/1 var(--mono);color:var(--muted);text-transform:uppercase;letter-spacing:.06em;
+       border:1px solid var(--line);border-radius:999px;padding:.35rem .6rem;white-space:nowrap}
+.meta{color:var(--muted);font-size:.9rem}
+.search{display:flex;gap:.5rem;margin:1.2rem 0 1.8rem;max-width:44rem}
+.search input[type=search]{flex:1;padding:.7rem .9rem;border:1px solid var(--line);
+       border-radius:10px;background:var(--card);color:var(--fg);font:15px var(--sans)}
+.search input[type=search]:focus{outline:2px solid var(--accent);outline-offset:1px;
+       border-color:transparent}
+.hits{display:grid;gap:1rem}
+.hit{margin:0;padding:1rem 1.1rem;background:var(--card);border:1px solid var(--line);
+     border-radius:12px;box-shadow:var(--shadow)}
+.hit .where{font:600 14px/1.5 var(--mono);overflow-wrap:anywhere}
+.hit .where a{text-decoration:none}
+.hit .where .share{color:var(--accent)}
+.hit .where .path{color:var(--fg)}
+.hit .chips{display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.6rem}
+.chip{font:11px/1 var(--mono);color:var(--muted);border:1px solid var(--line);
+      border-radius:999px;padding:.35rem .6rem;white-space:nowrap}
+.chip b{color:var(--fg);font-weight:600}
+.hit .snippet{margin:.75rem 0 .9rem;font-size:.95rem;line-height:1.6;color:var(--fg);
+             display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.hit .more a{font:600 .85rem/1 var(--sans)}
+.recent{margin:2.5rem 0 0}
+.recent h2{font-size:.75rem;text-transform:uppercase;letter-spacing:.09em;color:var(--muted);
+           margin:0 0 .5rem;font-weight:600}
+.recent ul{list-style:none;padding:0;margin:0;border:1px solid var(--line);border-radius:12px;
+           background:var(--card);overflow:hidden}
+.recent li{border-top:1px solid var(--line)}
+.recent li:first-child{border-top:0}
+.recent a{display:block;padding:.6rem 1rem;text-decoration:none;color:var(--fg);
+          font:13px/1.4 var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.recent a:hover{background:var(--accent-2)}
+.hero{padding:1.2rem 0 1.2rem}
+.hero h1{font-size:1.7rem;line-height:1.2;margin:0 0 .4rem;letter-spacing:-.02em}
+.hero p{margin:0;color:var(--muted)}
+.doc{margin:1rem 0 0;padding:1.1rem 1.25rem;background:var(--code);border:1px solid var(--line);
+     border-radius:12px;font:13.5px/1.7 var(--mono);white-space:pre-wrap;
+     overflow-wrap:anywhere;tab-size:4}
+.md{margin:1rem 0 0;padding:1.1rem 1.25rem;background:var(--code);border:1px solid var(--line);
+    border-radius:12px;font:15px/1.65 var(--sans)}
+.md > :first-child{margin-top:0}
+.md > :last-child{margin-bottom:0}
+.md h1,.md h2,.md h3,.md h4,.md h5,.md h6{font-family:var(--sans);line-height:1.3;
+    margin:1.5rem 0 .5rem;letter-spacing:-.01em}
+.md h1{font-size:1.4rem}
+.md h2{font-size:1.15rem;padding-bottom:.3rem;border-bottom:1px solid var(--line)}
+.md h3{font-size:1rem}
+.md h4,.md h5,.md h6{font-size:.95rem}
+.md p{margin:.7rem 0}
+.md ul,.md ol{margin:.6rem 0;padding-left:1.4rem}
+.md li{margin:.25rem 0}
+.md blockquote{margin:.9rem 0;padding:.2rem 0 .2rem 1rem;border-left:3px solid var(--accent);
+    color:var(--muted)}
+.md code{font:12.5px/1.5 var(--mono);background:var(--card);border:1px solid var(--line);
+    border-radius:5px;padding:.1rem .3rem}
+.md pre.code{background:var(--card);border:1px solid var(--line);border-radius:8px;
+    padding:.8rem 1rem;overflow:auto;margin:.9rem 0}
+.md pre.code code{background:none;border:0;padding:0;font-size:12.5px;line-height:1.6}
+.md a{color:var(--accent)}
+.md hr{border:0;border-top:1px solid var(--line);margin:1.4rem 0}
+.button{display:inline-block;padding:.5rem .8rem;border:0;border-radius:8px;
+        background:var(--accent);color:#fff;font:600 .88rem/1 var(--sans);
+        text-decoration:none;cursor:pointer}
+.button.ghost{background:transparent;color:var(--accent);border:1px solid var(--accent)}
+.foot{margin:3rem auto 2rem;max-width:56rem;padding:0 1.25rem;color:var(--muted);
+      font:12px/1 var(--mono);display:flex;gap:.5rem;flex-wrap:wrap}
+.empty{color:var(--muted);padding:2rem 0}
+@media (max-width:40rem){
+  .wrap{padding:1rem .8rem 3rem}
+  .bar{padding:.55rem .8rem}
+  .title{font-size:1.15rem}
+  .search{flex-direction:column}
+}
+</style></head>
+<body>
+<header class="bar">
+  <a class="brand" href="/"><span class="mark"></span>digfs</a>
+  <span class="host">pop-os</span>
+</header>
+<main class="wrap">
+<div class="head"><h1 class="title">power key long press</h1><span class="count">5 hits</span></div><form class="search" action="/search" method="get">
+<input type="search" name="q" value="power key long press" placeholder="search">
+<button class="button" type="submit">search</button></form><p class="meta">strong 1 · 1780 ms embed, 7 ms search</p><div class="hits"><article class="hit"><div class="where"><a href="/q/1/00-pmic-bringup.md"><span class="path">/tmp/opencode/corpus/pmic-bringup.md</span></a></div><div class="chips"><span class="chip"><b>unit</b> chunk 5</span><span class="chip"><b>score</b> 6.13</span><span class="chip">doc</span></div><p class="snippet">…Either way it <b>powers</b> the board off on a <b>long</b> <b>press</b> by…</p><p class="more"><a href="/q/1/00-pmic-bringup.md">Read the passage</a></p></article><article class="hit"><div class="where"><a href="/q/1/01-wifi-bringup.md"><span class="path">/tmp/opencode/corpus/wifi-bringup.md</span></a></div><div class="chips"><span class="chip"><b>unit</b> chunk 11</span><span class="chip"><b>score</b> 2.52</span><span class="chip">doc</span></div><p class="snippet">…WPA2 <b>key</b> install (WIFI_CMD_<b>KEY</b>, 14) only matters if the firmware…</p><p class="more"><a href="/q/1/01-wifi-bringup.md">Read the passage</a></p></article><article class="hit"><div class="where"><a href="/q/1/02-support-matrix.md"><span class="path">/tmp/opencode/corpus/support-matrix.md</span></a></div><div class="chips"><span class="chip"><b>unit</b> chunk 1</span><span class="chip"><b>score</b> 1.36</span><span class="chip">doc</span></div><p class="snippet">…partial | rails, RTC+alarm, CLKOUT2, <b>power</b> <b>key</b> (IRQ), thermal reporting | | USB xHCI…</p><p class="more"><a href="/q/1/02-support-matrix.md">Read the passage</a></p></article><article class="hit"><div class="where"><a href="/q/1/03-FINDINGS.md"><span class="path">/tmp/opencode/fs/repo/sigil/docs/FINDINGS.md</span></a></div><div class="chips"><span class="chip"><b>unit</b> chunk 43</span><span class="chip"><b>score</b> 1.29</span><span class="chip">doc</span></div><p class="snippet">…only a hash of the <b>key</b> for deduplication: - 74.9M x 16…</p><p class="more"><a href="/q/1/03-FINDINGS.md">Read the passage</a></p></article><article class="hit"><div class="where"><a href="/q/1/04-DESIGN.md"><span class="path">/tmp/opencode/fs/repo/sigil/docs/DESIGN.md</span></a></div><div class="chips"><span class="chip"><b>unit</b> chunk 4</span><span class="chip"><b>score</b> 1.07</span><span class="chip">doc</span></div><p class="snippet">…A shared <b>key</b> would let nodes in one federation derive identical hashes…</p><p class="more"><a href="/q/1/04-DESIGN.md">Read the passage</a></p></article></div><section class="recent"><h2>Recent searches</h2><ul><li><a href="/q/1/">power key long press</a></li></ul></section>
+</main>
+<footer class="foot"><span>digfs</span><span>·</span><a href="/stats">stats</a><span>·</span><a href="/help">help</a></footer>
+<script src="/mkd.js"></script>
+<script>
+(function(){
+  if(typeof mkd === 'undefined') return;
+  var list = document.querySelectorAll('pre.markdown');
+  for(var i = 0; i < list.length; i++){
+    var div = document.createElement('div');
+    div.className = 'md';
+    list[i].parentNode.insertBefore(div, list[i].nextSibling);
+    list[i].style.display = 'none';
+    new mkd(list[i], div).draw();
+  }
+})();
+</script>
+</body></html>
