@@ -21,6 +21,29 @@ This fork keeps the same URLs (`/`, `/f/…`, `/files/…`, `/snarf`,
 - names are HTML-escaped (upstream interpolated them raw), so a file called
   `<b>` is a file, not markup.
 
+## digfs mode
+
+If the folder it is pointed at is a digfs tree — it has `ctl` and `q/` —
+webbox becomes a search interface instead of a file browser:
+
+- `/` is a search box with the recent searches underneath, and a link to
+  browse everything;
+- `/search?q=…` writes `search …` (or `code …`) to `ctl` and renders the
+  newest query;
+- `/f/q/N/` renders that query as cards: where the text came from
+  (`share:/path`), the unit, the score, a three-line preview, and a link to
+  the passage;
+- `/f/q/N/NN-file` is the passage, with the metadata card and a *back to
+  results* button;
+- `/f/…` still browses everything, including mounted shares under `/mnt`.
+
+Every URL is a plain GET; no JavaScript, no fetch, no session.  Point it at
+the root of the tree:
+
+```
+webbox 8080 /n/dig
+```
+
 ## Installing
 
 This directory has only the script.  Take `urldecode.c` and the `mkfile`
@@ -44,6 +67,25 @@ hangs up, and every write in the script fails with `i/o on hungup channel`.
 Upstream's header string starts with a newline for exactly this reason;
 `header.html` here begins with a blank line for the same reason.  It is
 worth knowing before rewriting the page assembly.
+
+## Notes for whoever edits this
+
+Ninefront rc is not sh, and tcp80 does not shield you from that.  The five
+things that cost the most time:
+
+- **The blank line.** `tcp80` writes the status line and headers for a rule
+  and then execs the CGI with the connection as stdout, but never writes the
+  blank line that ends the header block.  The CGI's first byte must be `\n`;
+  `header.html` starts with one.  Without it the browser sees `200 OK` and
+  the connection dies, and every write fails with `i/o on hungup channel`.
+- `x=` is a syntax error (empty assignment).  Use `x=''` or `x=()`.
+- `awk -v q=$pat` parses `q=$pat` as an assignment and fails.  Quote the
+  prefix: `awk -v 'q='$pat`.
+- `ls dir` prints `dir/name`, not `name`.  Strip it with `sed 's|.*/||'`
+  before matching on the basename (this silently produced empty listings).
+- `'search '^$list` prefixes *every* element of the list; `echo search $list`
+  joins the elements with spaces, which is what a command line wants.
+- rc has `break` but no `continue`; filter the list before the loop.
 
 ## Licence
 
