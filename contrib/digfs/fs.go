@@ -186,6 +186,7 @@ func (t *tree) build() *fsNode {
 	help := t.file(t.root, "help", 0444, func() []byte { return []byte(helpText) })
 	roots := t.file(t.root, "roots", 0444, func() []byte { return []byte(t.rootsText()) })
 	shares := t.file(t.root, "shares", 0444, func() []byte { return []byte(t.sharesText()) })
+	logFile := t.file(t.root, "log", 0444, func() []byte { return []byte(eventText()) })
 
 	// mnt is the live view of every mounted server: a remote tree walked
 	// through this namespace, not a copy.
@@ -221,7 +222,7 @@ func (t *tree) build() *fsNode {
 	})
 	t.newest.parent = t.qdir
 
-	t.root.list = func() []*fsNode { return []*fsNode{ctl, stats, roots, shares, t.qdir, mnt, help} }
+	t.root.list = func() []*fsNode { return []*fsNode{ctl, stats, roots, shares, logFile, t.qdir, mnt, help} }
 	return t.root
 }
 
@@ -378,8 +379,8 @@ func (t *tree) control(line string) error {
 			return fmt.Errorf("%s is not mounted", f[1])
 		}
 		go func() {
-			if _, _, err := sh.refresh(sub, t.maxFetch, skipDirs); err != nil {
-				logf("refresh %s: %v", sh.name, err)
+			if _, _, _, err := sh.refresh(sub, t.maxFetch, skipDirs); err != nil {
+				eventf("refresh %s: %v", sh.name, err)
 			}
 		}()
 		return nil

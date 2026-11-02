@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -25,6 +26,31 @@ func (r *rootsFlag) Set(v string) error {
 }
 
 var verbose bool
+
+// eventLog is a small ring the /log file reads: enough for an agent to see
+// what happened without a tail on stderr.
+var eventMu sync.Mutex
+var eventLines []string
+
+func eventf(format string, a ...any) {
+	msg := fmt.Sprintf(format, a...)
+	eventMu.Lock()
+	eventLines = append(eventLines, time.Now().Format("2006-01-02 15:04:05")+" "+msg)
+	if len(eventLines) > 256 {
+		eventLines = eventLines[len(eventLines)-256:]
+	}
+	eventMu.Unlock()
+	logf("%s", msg)
+}
+
+func eventText() string {
+	eventMu.Lock()
+	defer eventMu.Unlock()
+	if len(eventLines) == 0 {
+		return ""
+	}
+	return strings.Join(eventLines, "\n") + "\n"
+}
 
 func defaultCache() string {
 	if d, err := os.UserCacheDir(); err == nil {
@@ -75,6 +101,8 @@ func main() {
 		shares: map[string]*share{}, remote: map[string]*fsNode{},
 		cacheDir: *cache, maxFetch: *maxFetch}
 	t.build()
+	// A restart keeps the same namespace: re-dial every share we had.
+	t.restoreShares()
 
 	// The HTML view only serves files it can prove are indexed. Ask the engine
 	// for the folders when none were named.

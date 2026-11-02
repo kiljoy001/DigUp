@@ -113,6 +113,19 @@ not break search or `text`; only `raw` and "open the file" need the copy.
 `refresh <name> [path]` and `index <name> [path]` take a subdirectory, which
 is how you index one folder of a large export.
 
+`refresh` reconciles rather than only adds: a file the remote no longer has
+is deleted from the mirror, and empty directories go with it, so the next
+`index` run drops those units (`sync: … 1 removed`). Subtrees that were not
+walked — `.git`, an unreadable directory, anything over `-maxfetch` — are
+kept rather than guessed at.
+
+Mounts persist: `<cache>/shares.conf` holds `name \t address \t path` and
+digfs re-dials them at startup, so the namespace comes back with the
+process. The connections are the only live state; everything else is on
+disk. `/shares` reports the mirror's size, removals, state and the last
+refresh/index times, and `/log` keeps the last 256 events for an agent that
+was not watching stderr.
+
 The engine is started with the cache directory as one of its roots, so
 anything refreshed is searchable without restarting.
 

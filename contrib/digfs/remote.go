@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -26,12 +27,15 @@ type share struct {
 	rootinfo p9dir
 	cache    string
 
-	mu    sync.Mutex
-	state string
-	when  time.Time
-	files int64
-	bytes int64
-	err   string
+	mu          sync.Mutex
+	state       string
+	when        time.Time
+	lastRefresh time.Time
+	lastIndex   time.Time
+	files       int64
+	bytes       int64
+	removed     int64
+	err         string
 }
 
 func (t *tree) mount(name, addr, aname string) (*share, error) {
@@ -71,7 +75,11 @@ func (t *tree) mount(name, addr, aname string) (*share, error) {
 	t.mu.Lock()
 	t.shares[name] = sh
 	t.mu.Unlock()
-	logf("mount %s at %s (aname %q), cache %s", name, addr, aname, sh.cache)
+	if f, b := mirrorStats(sh.cache); f > 0 {
+		sh.files, sh.bytes = f, b
+	}
+	t.saveShares()
+	eventf("mount %s at %s (aname %q), cache %s", name, addr, aname, sh.cache)
 	return sh, nil
 }
 
@@ -87,6 +95,8 @@ func (t *tree) umount(name string) error {
 	}
 	sh.c.clunk(sh.root)
 	sh.c.close()
+	t.saveShares()
+	eventf("umount %s", name)
 	return nil
 }
 
@@ -209,12 +219,12 @@ var skipDirs = map[string]bool{
 
 // refresh mirrors sub (relative to the attach point) into the cache.  Files
 // whose size and modification time already match are left alone.
-func (sh *share) refresh(sub string, maxFile int64, skip map[string]bool) (int64, int64, error) {
+func (sh *share) refresh(sub string, maxFile int64, skip map[string]bool) (int64, int64, int64, error) {
 	sh.mu.Lock()
 	if sh.state == "refreshing" || sh.state == "indexing" {
 		state := sh.state
 		sh.mu.Unlock()
-		return 0, 0, fmt.Errorf("%s is %s", sh.name, state)
+		return 0, 0, 0, fmt.Errorf("%s is %s", sh.name, state)
 	}
 	sh.state = "refreshing"
 	sh.mu.Unlock()
@@ -228,12 +238,16 @@ func (sh *share) refresh(sub string, maxFile int64, skip map[string]bool) (int64
 
 	type item struct {
 		comps []string
-		d     p9dir
+		rel   string
 	}
-	root := sh.comps(sub)
-	queue := []item{{root, p9dir{}}}
+	base := strings.Trim(sub, "/")
+	root := sh.comps(base)
+	queue := []item{{root, ""}}
+	seen := map[string]bool{} // files the remote still has, relative to base
+	keep := []string{}        // subtrees we did not look into, so never prune them
 	var files, bytes int64
 	var firstErr error
+
 	for len(queue) > 0 {
 		it := queue[0]
 		queue = queue[1:]
@@ -242,23 +256,31 @@ func (sh *share) refresh(sub string, maxFile int64, skip map[string]bool) (int64
 			if firstErr == nil {
 				firstErr = err
 			}
+			if it.rel != "" {
+				keep = append(keep, it.rel+"/")
+			}
 			continue
 		}
-		rel := strings.TrimPrefix(strings.Join(it.comps, "/"), "/")
 		for _, d := range entries {
 			name := d.name
 			if name == "." || name == ".." || name == "" {
 				continue
 			}
+			rel := name
+			if it.rel != "" {
+				rel = it.rel + "/" + name
+			}
 			comps := append(append([]string(nil), it.comps...), name)
 			if d.isDir() {
 				if skip[name] {
+					keep = append(keep, rel+"/")
 					continue
 				}
-				queue = append(queue, item{comps, d})
+				queue = append(queue, item{comps, rel})
 				continue
 			}
-			n, copied, err := sh.copy(comps, d, filepath.Join(sh.cache, rel, name), maxFile)
+			seen[rel] = true // seen counts even when not copied: never prune it
+			n, copied, err := sh.copy(comps, d, filepath.Join(sh.cache, base, filepath.FromSlash(rel)), maxFile)
 			if err != nil {
 				if firstErr == nil {
 					firstErr = err
@@ -271,10 +293,22 @@ func (sh *share) refresh(sub string, maxFile int64, skip map[string]bool) (int64
 			}
 		}
 	}
+
+	// Reconcile: a file the remote no longer has must leave the mirror, or the
+	// index keeps answering with something that is gone.
+	removed, perr := pruneMirror(filepath.Join(sh.cache, base), seen, keep)
+	if perr != nil && firstErr == nil {
+		firstErr = perr
+	}
+
+	mfiles, mbytes := mirrorStats(filepath.Join(sh.cache, base))
+
 	sh.mu.Lock()
-	sh.files += files
-	sh.bytes += bytes
+	sh.files = mfiles
+	sh.bytes = mbytes
+	sh.removed += removed
 	sh.when = time.Now()
+	sh.lastRefresh = time.Now()
 	if firstErr != nil {
 		sh.err = firstErr.Error()
 		sh.state = "error"
@@ -282,8 +316,74 @@ func (sh *share) refresh(sub string, maxFile int64, skip map[string]bool) (int64
 		sh.err = ""
 	}
 	sh.mu.Unlock()
-	logf("refresh %s/%s: %d files, %d bytes", sh.name, sub, files, bytes)
-	return files, bytes, firstErr
+	eventf("refresh %s/%s: %d copied, %d bytes, %d removed", sh.name, base, files, bytes, removed)
+	return files, bytes, removed, firstErr
+}
+
+// mirrorStats is what the mirror holds now, not what the last run copied.
+func mirrorStats(dir string) (int64, int64) {
+	var files, bytes int64
+	filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		if info, err := d.Info(); err == nil {
+			files++
+			bytes += info.Size()
+		}
+		return nil
+	})
+	return files, bytes
+}
+
+// pruneMirror deletes local files under dir that the remote no longer has.
+// keep lists subtrees that were not walked (skipped on purpose or unreadable).
+func pruneMirror(dir string, seen map[string]bool, keep []string) (int64, error) {
+	st, err := os.Stat(dir)
+	if err != nil || !st.IsDir() {
+		return 0, nil
+	}
+	var removed int64
+	var dirs []string
+	err = filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if p != dir {
+				dirs = append(dirs, p)
+			}
+			return nil
+		}
+		rel, err := filepath.Rel(dir, p)
+		if err != nil {
+			return nil
+		}
+		rel = filepath.ToSlash(rel)
+		if strings.HasSuffix(rel, ".part") {
+			os.Remove(p)
+			return nil
+		}
+		if seen[rel] {
+			return nil
+		}
+		for _, k := range keep {
+			if strings.HasPrefix(rel, k) {
+				return nil
+			}
+		}
+		if os.Remove(p) == nil {
+			removed++
+		}
+		return nil
+	})
+	// Empty directories go too, deepest first, so a deleted folder leaves no
+	// ghost behind in /shares or in the indexer's walk.
+	sort.Slice(dirs, func(i, j int) bool { return len(dirs[i]) > len(dirs[j]) })
+	for _, d := range dirs {
+		os.Remove(d) // fails when non-empty, which is what we want
+	}
+	return removed, err
 }
 
 // indexShare runs `digup index` over the mirror in the background: an index
@@ -334,6 +434,7 @@ func (t *tree) indexShare(name, sub string) error {
 		}
 		sh.mu.Lock()
 		sh.when = time.Now()
+		sh.lastIndex = time.Now()
 		if err != nil {
 			sh.state = "error"
 			sh.err = err.Error()
@@ -343,9 +444,9 @@ func (t *tree) indexShare(name, sub string) error {
 		}
 		sh.mu.Unlock()
 		if err != nil {
-			logf("index %s: %v", name, err)
+			eventf("index %s: %v", name, err)
 		} else {
-			logf("index %s: done", name)
+			eventf("index %s: done", name)
 		}
 		_ = log
 	}()
@@ -358,8 +459,9 @@ func (t *tree) sharesText() string {
 	var b strings.Builder
 	for _, sh := range t.shares {
 		sh.mu.Lock()
-		fmt.Fprintf(&b, "%s\t%s\t%s\t%d files\t%d bytes\t%s\t%s\n",
-			sh.name, sh.addr, sh.aname, sh.files, sh.bytes, sh.state, sh.cache)
+		fmt.Fprintf(&b, "%s\t%s\t%s\t%d files\t%d bytes\t%d removed\t%s\trefresh %s\tindex %s\n",
+			sh.name, sh.addr, sh.aname, sh.files, sh.bytes, sh.removed, sh.state,
+			stamp(sh.lastRefresh), stamp(sh.lastIndex))
 		if sh.err != "" {
 			fmt.Fprintf(&b, "\terror: %s\n", sh.err)
 		}
@@ -453,4 +555,50 @@ func (t *tree) remoteChildren(sh *share, comps []string) []*fsNode {
 		out = append(out, t.remoteNode(sh, child, d))
 	}
 	return out
+}
+
+func stamp(t time.Time) string {
+	if t.IsZero() {
+		return "-"
+	}
+	return t.Format("2006-01-02 15:04:05")
+}
+
+// saveShares records the mount list so a restart comes back with the same
+// namespace.  Connections are re-dialled; nothing else is kept.
+func (t *tree) saveShares() {
+	t.mu.Lock()
+	var b strings.Builder
+	for _, sh := range t.shares {
+		fmt.Fprintf(&b, "%s\t%s\t%s\n", sh.name, sh.addr, sh.aname)
+	}
+	t.mu.Unlock()
+	if err := os.MkdirAll(t.cacheDir, 0777); err != nil {
+		return
+	}
+	path := filepath.Join(t.cacheDir, "shares.conf")
+	if err := os.WriteFile(path, []byte(b.String()), 0666); err != nil {
+		eventf("save shares: %v", err)
+	}
+}
+
+func (t *tree) restoreShares() {
+	path := filepath.Join(t.cacheDir, "shares.conf")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		f := strings.Split(line, "\t")
+		if len(f) < 2 || f[0] == "" {
+			continue
+		}
+		aname := ""
+		if len(f) > 2 {
+			aname = f[2]
+		}
+		if _, err := t.mount(f[0], f[1], aname); err != nil {
+			eventf("restore %s: %v", f[0], err)
+		}
+	}
 }
