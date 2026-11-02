@@ -44,18 +44,35 @@ the root of the tree:
 webbox 8080 /n/dig
 ```
 
+## Markdown
+
+`mkd.js` is sirjofri's [mkdparse](https://github.com/sirjofri/mkdparse),
+modified: the regex-over-the-whole-document passes became one line-based
+pass, so fenced code, ordered lists, `###`, `---`, inline code and links
+work, code is never re-parsed as markup, and a hard-wrapped list item keeps
+its continuation line.  The input is a `<pre>` whose `innerHTML` is already
+escaped, so a document containing `<script>` stays a document.
+
+A passage whose name ends in `.md` is marked `class="doc markdown"`; a
+small script at the end of every page replaces it with the rendered HTML.
+Without the script (or without `mkd.js`) the text still appears, as text —
+progressive enhancement, not a requirement.
+
 ## Installing
 
-This directory has only the script.  Take `urldecode.c` and the `mkfile`
-from upstream (unchanged), then:
+This directory has the script and the parser.  Take `urldecode.c` and the
+`mkfile` from upstream (unchanged), then:
 
 ```
 mk install
-webbox 8080 /n/dig/q/newest
+mkdir -p /lib/webbox
+cp mkd.js /lib/webbox/mkd.js
+webbox 8080 /n/dig
 ```
 
 It needs `tcp80` (<https://shithub.us/grobe0ba/tcp80/HEAD/info.html>) and
-`urldecode` on a 9front box.
+`urldecode` on a 9front box.  `webbox` copies `/lib/webbox/mkd.js` into its
+web root at startup; without it, pages show the raw text.
 
 ## The blank line
 
